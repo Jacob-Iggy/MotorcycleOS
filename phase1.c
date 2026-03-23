@@ -154,7 +154,7 @@ void *motion_thread(void *arg)
                 // calculate distance
                 // NOTE: speed is in mph so need to calculate distance covered every second
                 // to match dashboard refreshes
-                float distance = speed / 3600;
+                float distance = (float)speed / 3600;
                 // update distance counters
                 distance_total += distance;
                 distance_trip += distance;
@@ -168,7 +168,7 @@ void *motion_thread(void *arg)
                 usleep(100000);
                 speed--;
                 // calculate distance
-                float distance = speed / 3600;
+                float distance = (float)speed / 3600;
                 // update distance counters
                 distance_total += distance;
                 distance_trip += distance;
