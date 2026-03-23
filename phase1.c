@@ -148,7 +148,7 @@ void *motion_thread(void *arg)
         {
             while (speed >= 50 && speed < 70)
             {
-                // sleep for 1 second then increment speed
+				// sleep for 1 second then increment speed
                 usleep(100000);
                 speed++;
                 // calculate distance
@@ -164,7 +164,7 @@ void *motion_thread(void *arg)
         {
             while (speed <= 70 && speed > 50)
             {
-                // sleep for 1 second then decrement speed
+				// sleep for 1 second then increment speed
                 usleep(100000);
                 speed--;
                 // calculate distance
@@ -185,20 +185,27 @@ void *fuel_thread(void *arg)
     {
         if (rpm_zone == 0)
         { // Idle = [1100═1300)
-            fuel -= 0.02;
+            fuel -= 0.002;
         }
         else if (rpm_zone == 1)
         { // Normal = [1300═8000)
-            fuel -= 0.05;
+            fuel -= 0.005;
         }
         else if (rpm_zone == 2)
         { // High = [8000═14500)
-            fuel -= 0.07;
+            fuel -= 0.007;
         }
         else if (rpm_zone == 3)
         { // Redline = [14500═16500)
-            fuel -= 0.09;
+            fuel -= 0.009;
         }
+
+		//check if the fuel is 0 and shutoff the engine
+		if (fuel <= 0) {
+			engine_state = 0;
+		}
+		// sleep for 1 second then decrement speed
+        usleep(100000);
     }
     return NULL;
 }
@@ -655,7 +662,7 @@ int main()
     engine_temp = 45; // cold start
     engine_temp_zone = 0;
 
-    speed = 0;
+    speed = 50;
     fuel = 3.5f;
     low_fuel_warning = 0;
 
