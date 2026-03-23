@@ -139,41 +139,33 @@ void *engine_thread(void *arg)
 // Motion Subsystem (Logan)
 void *motion_thread(void *arg)
 {
+	//variable to determine direction
+	//1 = accelerate, -1 = decelerate
+	int direction = 1;
     while (1)
     {
+		sleep(1);
+
+		//update speed based on direction
+		speed += direction;
         // check what the current speed is
         // 50mph -> increase
         // 70mph -> decrease
-        if (speed == 50)
+        if (speed == 70)
         {
-            while (speed >= 50 && speed < 70)
-            {
-                // sleep for 1 second then increment speed
-                sleep(1);
-                speed++;
-                // calculate distance
-                // NOTE: speed is in mph so need to calculate distance covered every second
-                // to match dashboard refreshes
-                float distance = (float)speed / 3600;
-                // update distance counters
-                distance_total += distance;
-                distance_trip += distance;
-            }
+            //flip direction
+			direction = -1;
         }
-        else if (speed == 70)
+        else if (speed == 50)
         {
-            while (speed <= 70 && speed > 50)
-            {
-                // sleep for 1 second then increment speed
-                sleep(1);
-                speed--;
-                // calculate distance
-                float distance = (float)speed / 3600;
-                // update distance counters
-                distance_total += distance;
-                distance_trip += distance;
-            }
+            //flip direction
+			direction = 1;
         }
+ 		// calculate distance
+        float distance = (float)speed / 3600;
+        // update distance counters
+        distance_total += distance;
+        distance_trip += distance;
     }
     return NULL;
 }
@@ -200,13 +192,12 @@ void *fuel_thread(void *arg)
             fuel -= 0.009;
         }
 
-        // check if the fuel is 0 and shutoff the engine
-        if (fuel <= 0)
-        {
-            engine_state = 0;
-        }
-        // sleep for 1 second then decrement speed
-        sleep(1);
+		//check if the fuel is 0 and shutoff the engine
+		if (fuel <= 0) {
+			engine_state = 0;
+		}
+		// sleep for 1 second then decrement speed
+		sleep(1);
     }
     return NULL;
 }
@@ -652,45 +643,6 @@ void *dashboard_thread(void *arg)
     return NULL;
 }
 
-// timer thread to update time elapsed
-void *timer_thread(void *arg)
-{
-    while (1)
-    {
-        sleep(1); // wait for 1 second
-
-        if (engine_state == 0)
-        {
-            continue; // if engine is off, do not update time elapsed
-        }
-
-        // update total time elapsed
-        time_elapsed_total.seconds++;
-        if (time_elapsed_total.seconds >= 60)
-        {
-            time_elapsed_total.seconds = 0;
-            time_elapsed_total.minutes++;
-            if (time_elapsed_total.minutes >= 60)
-            {
-                time_elapsed_total.minutes = 0;
-                time_elapsed_total.hours++;
-            }
-        }
-
-        time_elapsed_trip.seconds++;
-        if (time_elapsed_trip.seconds >= 60)
-        {
-            time_elapsed_trip.seconds = 0;
-            time_elapsed_trip.minutes++;
-            if (time_elapsed_trip.minutes >= 60)
-            {
-                time_elapsed_trip.minutes = 0;
-                time_elapsed_trip.hours++;
-            }
-        }
-    }
-}
-
 // MAIN FUNCTION
 int main()
 {
@@ -733,7 +685,7 @@ int main()
     wheelSlipDetected = 0;
 
     // create threads
-    pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid, event_tid, dashboard_tid, timer_tid;
+    pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid, event_tid, dashboard_tid;
 
     pthread_create(&engine_tid, NULL, engine_thread, NULL);
     pthread_create(&motion_tid, NULL, motion_thread, NULL);
@@ -742,7 +694,6 @@ int main()
     pthread_create(&hybrid_assist_tid, NULL, hybrid_assist_thread, NULL);
     pthread_create(&event_tid, NULL, event_thread, NULL);
     pthread_create(&dashboard_tid, NULL, dashboard_thread, NULL);
-    pthread_create(&timer_tid, NULL, timer_thread, NULL);
 
     // Wait (threads run indefinitely)
     pthread_join(engine_tid, NULL);
@@ -752,7 +703,6 @@ int main()
     pthread_join(hybrid_assist_tid, NULL);
     pthread_join(event_tid, NULL);
     pthread_join(dashboard_tid, NULL);
-    pthread_join(timer_tid, NULL);
 
     return 0;
 }
