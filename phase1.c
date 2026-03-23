@@ -590,6 +590,60 @@ int main()
         refresh_dashboard(print_dashboard);
         usleep(100000); // refresh every 1 second
     }
+
+    srand(42);
+
+    engine_state     = 1;
+    rpm              = 1200;  // start at idle RPM
+    rpm_zone         = 0;
+    engine_temp      = 45;    // cold start
+    engine_temp_zone = 0;
+
+    speed            = 0;
+    fuel             = 3.5f;
+    low_fuel_warning = 0;
+
+    //Total distance - random start val
+    distance_total = (float)(rand() % 10000 + 1000);
+    distance_trip  = 0.0f;
+
+    //Total time elapsed - random starting value (HH:MM:SS)
+    time_elapsed_total.hours   = rand() % 100;
+    time_elapsed_total.minutes = rand() % 60;
+    time_elapsed_total.seconds = rand() % 60;
+
+    //Trip time always starts at zero
+    time_elapsed_trip.hours   = 0;
+    time_elapsed_trip.minutes = 0;
+    time_elapsed_trip.seconds = 0;
+
+    signal_state          = 0;
+    headlight_state       = 1;
+    battery_level         = 74;
+    electric_assist_state = 1;
+    charging_state        = 0;
+    hybrid_mode           = 2; //hybrid assist
+
+    event_count        = 0;
+    newRPMZone         = 0;
+    hybridAssistChange = 0;
+    wheelSlipDetected  = 0;
+
+    //create threads
+    pthread_t engine_tid, dashboard_tid, ecu_tid, event_tid;
+
+    pthread_create(&engine_tid,    NULL, engine_thread,    NULL);
+    pthread_create(&ecu_tid,       NULL, ecu_thread,       NULL);
+    pthread_create(&event_tid,     NULL, event_thread,     NULL);
+    pthread_create(&dashboard_tid, NULL, dashboard_thread, NULL);
+
+    //Wait (threads run indefinitely)
+    pthread_join(engine_tid,    NULL);
+    pthread_join(ecu_tid,       NULL);
+    pthread_join(event_tid,     NULL);
+    pthread_join(dashboard_tid, NULL);
+
+    return 0;
 }
 
 // engine state ═ on/off
