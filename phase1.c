@@ -57,6 +57,62 @@ int battery_warning_logged;         // variable to track if low battery warning 
 // THREADS NEEDED
 
 // Engine Subsystem (Nick)
+//engine subsystem - updates RPM, temps, simulates idle to high
+void* engine_thread(void* arg) {
+
+    int rpm_direction = 1; //1 = rpms increase, -1 = rpms decrease
+
+    while (1) {
+        if (engine_state == 0) {
+            // if engines off rpms go down by 150 until at 0 and temps lower
+            if (rpm > 0) {
+                rpm -= 150;
+                if (rpm < 0) rpm = 0;
+            }
+            if (engine_temp > 20) {
+                engine_temp -= 1;
+            }
+
+        } else {
+            //simulates increasing rpms for phase 1
+            rpm += rpm_direction * 150;
+
+            //lowers rpms back down for simulation and repeats
+            if (rpm >= 8500) {
+                rpm = 8500;
+                rpm_direction = -1;
+            } else if (rpm <= 1200) {
+                rpm = 1200;
+                rpm_direction = 1;
+            }
+
+            //if decreases or increases wrong sets to max and mins
+            if (rpm < 1100)  rpm = 1100;
+            if (rpm > 16500) rpm = 16500;
+
+            //rpm zones connect to temps, the higher zone the faster engine increases in temp, vice versa but idle lets it cool
+            if (rpm_zone == 3) {
+                engine_temp += 3;
+            } else if (rpm_zone == 2) {
+                engine_temp += 2;
+            } else if (rpm_zone == 1) {
+                if (engine_temp < 88) {
+                    engine_temp += 1;
+                }
+            } else if (rpm_zone == 0) {
+                if (engine_temp > 75) {
+                    engine_temp -= 1;
+                }
+            }
+            //max of 130 degrees
+            if (engine_temp > 130) engine_temp = 130;
+        }
+
+        sleep(1); //update every second
+    }
+
+    return NULL;
+}
 
 // Motion Subsystem (Logan)
 void *motion_thread(void *arg)
@@ -124,8 +180,6 @@ void *fuel_thread(void *arg)
     }
     return NULL;
 }
-
-// Dashboard Subsystem (Nick)
 
 // ECU Subsystem (Jacob)
 void *ecu_thread(void *arg)
@@ -403,40 +457,129 @@ void *event_thread(void *arg)
 }
 
 // Dashboard Subsystem
-// code from assignment
-void refresh_dashboard(void (*print_dashboard)(void))
-{
-    // The below print statement moves the cursor to top left and clears the screen
-    printf(" \033[ H \033[ J ");
-    // Reprint dashboard
-    print_dashboard();
-    // Force output to display immediately
+//prints dashboard
+void print_dashboard(void) {
+
+    char *eng_status = (engine_state == 1) ? "ON " : "OFF";
+
+    char *signal_label;
+    if      (signal_state == 1) signal_label = "< LEFT      ";
+    else if (signal_state == 2) signal_label = "RIGHT >     ";
+    else if (signal_state == 3) signal_label = "< HAZARD >  ";
+    else                        signal_label = "OFF         ";
+
+    char *headlight_label = (headlight_state == 1) ? "* ON " : "o OFF";
+
+    char *temp_zone_label;
+    if      (engine_temp_zone == 0) temp_zone_label = "COLD    ";
+    else if (engine_temp_zone == 1) temp_zone_label = "NORMAL  ";
+    else if (engine_temp_zone == 2) temp_zone_label = "HOT     ";
+    else                            temp_zone_label = "OVERHEAT";
+
+    char *rpm_zone_label;
+    if      (rpm_zone == 0) rpm_zone_label = "IDLE   ";
+    else if (rpm_zone == 1) rpm_zone_label = "NORMAL ";
+    else if (rpm_zone == 2) rpm_zone_label = "HIGH   ";
+    else if (rpm_zone == 3) rpm_zone_label = "REDLINE";
+    else                    rpm_zone_label = "OFF    ";
+
+    char *hybrid_mode_label;
+    if      (hybrid_mode == 1) hybrid_mode_label = "CRUISING    ";
+    else if (hybrid_mode == 2) hybrid_mode_label = "ASSIST      ";
+    else if (hybrid_mode == 3) hybrid_mode_label = "REGENERATION";
+    else                       hybrid_mode_label = "NONE        ";
+
+    char *elec_assist_label = (electric_assist_state == 1) ? "ON " : "OFF";
+    char *charging_label    = (charging_state == 1)        ? "ON " : "OFF";
+
+    //fuel data (4.7 gal tank)
+    char fuel_bar[21];
+    int fuel_filled = (int)((fuel / 4.7f) * 20);
+    if (fuel_filled < 0)  fuel_filled = 0;
+    if (fuel_filled > 20) fuel_filled = 20;
+    for (int i = 0; i < 20; i++) {
+        fuel_bar[i] = (i < fuel_filled) ? '#' : '-';
+    }
+    fuel_bar[20] = '\0';
+
+    char *low_fuel_label = (low_fuel_warning == 1) ? "!! LOW FUEL !!" : "              ";
+
+   //battery display
+    char batt_bar[21];
+    int batt_filled = (battery_level * 20) / 100;
+    if (batt_filled < 0)  batt_filled = 0;
+    if (batt_filled > 20) batt_filled = 20;
+    for (int i = 0; i < 20; i++) {
+        batt_bar[i] = (i < batt_filled) ? '#' : '-';
+    }
+    batt_bar[20] = '\0';
+
+    //print dash
+    printf("╔═════════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║                                GEEKERS OS                                  ║\n");
+    printf("║═════════════════════════════════════════════════════════════════════════════║\n");
+    printf("║  ENGINE: %-3s  |  TEMP: %3d C (%-8s)  |  RPM: %5d (%-7s)           ║\n",
+           eng_status, engine_temp, temp_zone_label, rpm, rpm_zone_label);
+    printf("║  SPEED:  %3d mph                                                           ║\n",
+           speed);
+    printf("║─────────────────────────────────────────────────────────────────────────────║\n");
+    printf("║  FUEL   [%-20s]  %4.2f gal  %-14s                   ║\n",
+           fuel_bar, fuel, low_fuel_label);
+    printf("║  DIST TOTAL: %8.1f mi        DIST TRIP: %6.1f mi                      ║\n",
+           distance_total, distance_trip);
+    printf("║─────────────────────────────────────────────────────────────────────────────║\n");
+    printf("║  TIME ELAPSED (TOTAL): %02d:%02d:%02d                                            ║\n",
+           time_elapsed_total.hours, time_elapsed_total.minutes, time_elapsed_total.seconds);
+    printf("║  TIME ELAPSED (TRIP):  %02d:%02d:%02d                                            ║\n",
+           time_elapsed_trip.hours, time_elapsed_trip.minutes, time_elapsed_trip.seconds);
+    printf("║─────────────────────────────────────────────────────────────────────────────║\n");
+    printf("║  SIGNAL: %-12s       HEADLIGHT: %-5s                              ║\n",
+           signal_label, headlight_label);
+    printf("║═══════════════════════════ HYBRID ASSIST SYSTEM ════════════════════════════║\n");
+    printf("║  BATTERY  [%-20s]  %3d%%                                       ║\n",
+           batt_bar, battery_level);
+    printf("║  ELECTRIC ASSIST: %-3s    CHARGING: %-3s    HYBRID MODE: %-12s     ║\n",
+           elec_assist_label, charging_label, hybrid_mode_label);
+    printf("║═══════════════════════════════ EVENT LOG ═══════════════════════════════════║\n");
+
+    //event log
+    int start = (event_count >= 3) ? event_count - 3 : 0;
+    int display_num = 1;
+    for (int i = start; i < event_count; i++) {
+        printf("║  %d. [%02d:%02d:%02d] %-57s  ║\n",
+               display_num,
+               event_log[i].timestamp.hours,
+               event_log[i].timestamp.minutes,
+               event_log[i].timestamp.seconds,
+               event_log[i].description);
+        display_num++;
+    }
+    //if less than 3 events leave space
+    for (int i = display_num; i <= 3; i++) {
+        printf("║  %d. ---                                                                     ║\n", i);
+    }
+
+    printf("╚═════════════════════════════════════════════════════════════════════════════╝\n");
+}
+
+//function to refresh dash
+void refresh_dashboard(void (*print_fn)(void)) {
+    //clears screen and moves cursor as given in notes
+    printf("\033[H\033[J");
+    //reprint dash
+    print_fn();
+    //display output immediately
     fflush(stdout);
 }
 
-int i = 0;
 
-void print_dashboard()
-{
-    printf("╔═════════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║                                GEEKERS OS                                   ║\n");
-    printf("║═════════════════════════════════════════════════════════════════════════════║\n");
-    printf("║ ENG ●        TMP 96°C (HOT)        RPM 7200 (IDLE)        SPD 68 mph        ║\n");
-    printf("║ FUEL   [██████████░░░░░░░░] LOW     DIST 21.3 km                             ║\n");
-    printf("║ TIME ELAPSED (TOTAL):   82:41:12                                           ║\n");
-    printf("║ TIME ELAPSED (TRIP):    00:34:52                                            ║\n");
-    printf("║ SIGNAL: ◄ LEFT BLINK        HEADLIGHT: ● ON                                 ║\n");
-    printf("║══════════════════════════ HYBRID ASSIST SYSTEM ═════════════════════════════║\n");
-    printf("║ BATTERY LEVEL     [████████░░░░] 74%%                                        ║\n");
-    printf("║ ELECTRIC ASSIST   ON                                                        ║\n");
-    printf("║ CHARGING STATE    OFF                                                       ║\n");
-    printf("║ HYBRID MODE       ASSIST                                                    ║\n");
-    printf("║═══════════════════════════════ EVENT LOG ═══════════════════════════════════║\n");
-    printf("║ 1. Engine started                                                           ║\n");
-    printf("║ 2. Left blinker activated                                                   ║\n");
-    printf("║ 3. Speed reached 68 mph                                                     ║\n");
-    printf("╚═════════════════════════════════════════════════════════════════════════════╝\n");
-    i += 1;
+//dash subsystem
+void* dashboard_thread(void* arg) {
+    while (1) {
+        refresh_dashboard(print_dashboard);
+        usleep(500000); //refreshes dash every 0.5 sec
+    }
+    return NULL;
 }
 
 // MAIN FUNCTION
