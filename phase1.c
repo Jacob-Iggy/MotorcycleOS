@@ -59,8 +59,71 @@ int battery_warning_logged;         // variable to track if low battery warning 
 // Engine Subsystem (Nick)
 
 // Motion Subsystem (Logan)
+void *motion_thread(void *arg)
+{
+    while (1)
+    {
+        // check what the current speed is
+        // 50mph -> increase
+        // 70mph -> decrease
+        if (speed == 50)
+        {
+            while (speed >= 50 && speed < 70)
+            {
+                // sleep for 1 second then increment speed
+                usleep(100000);
+                speed++;
+                // calculate distance
+                // NOTE: speed is in mph so need to calculate distance covered every second
+                // to match dashboard refreshes
+                float distance = speed / 3600;
+                // update distance counters
+                distance_total += distance;
+                distance_trip += distance;
+            }
+        }
+        else if (speed == 70)
+        {
+            while (speed <= 70 && speed > 50)
+            {
+                // sleep for 1 second then decrement speed
+                usleep(100000);
+                speed--;
+                // calculate distance
+                float distance = speed / 3600;
+                // update distance counters
+                distance_total += distance;
+                distance_trip += distance;
+            }
+        }
+    }
+    return NULL;
+}
 
 // Fuel Subsystem (Logan)
+void *fuel_thread(void *arg)
+{
+    while (1)
+    {
+        if (rpm_zone == 0)
+        { // Idle = [1100═1300)
+            fuel -= 0.02;
+        }
+        else if (rpm_zone == 1)
+        { // Normal = [1300═8000)
+            fuel -= 0.05;
+        }
+        else if (rpm_zone == 2)
+        { // High = [8000═14500)
+            fuel -= 0.07;
+        }
+        else if (rpm_zone == 3)
+        { // Redline = [14500═16500)
+            fuel -= 0.09;
+        }
+    }
+    return NULL;
+}
 
 // Dashboard Subsystem (Nick)
 
@@ -187,6 +250,44 @@ void *ecu_thread(void *arg)
 }
 
 // Hybrid Assist System Subsystem (Logan)
+void *hybrid_assis_thread(void *arg)
+{
+    while (1)
+    {
+        // Low-Speed Electric Cruising
+        if (speed > 0 && speed <= 30)
+        {
+            // set the electric assist state to on
+            electric_assist_state = 1;
+            // set hybrid mode
+            hybrid_mode = 1;
+            // vehicle uses battery assist so battery gets drained
+            battery_level - 0.05;
+        }
+
+        // Electric Assist During Acceleration
+        if (speed > 30 && speed <= 60)
+        {
+            electric_assist_state = 1;
+            hybrid_mode = 2;
+            battery_level - 0.07;
+        }
+        else if (speed > 60 && speed <= 90)
+        {
+            electric_assist_state = 1;
+            hybrid_mode = 2;
+            battery_level - 0.09;
+        }
+
+        // Regenerative Charging
+        if (hybrid_mode == 3)
+        {
+            // recharging state so charge battery incrementally
+            battery_level += 0.05;
+        }
+    }
+    return NULL;
+}
 
 // Event Logging Subsystem (Jacob)
 void *event_thread(void *arg)
@@ -301,63 +402,22 @@ void *event_thread(void *arg)
     return NULL;
 }
 
-// MAIN FUNCTION
-int main()
+// Dashboard Subsystem
+// code from assignment
+void refresh_dashboard(void (*print_dashboard)(void))
 {
-    // engine state ═ on/off
+    // The below print statement moves the cursor to top left and clears the screen
+    printf(" \033[ H \033[ J ");
+    // Reprint dashboard
+    print_dashboard();
+    // Force output to display immediately
+    fflush(stdout);
+}
 
-    // RPM ═ if engine = off rpm = 0
-    // if on not moving 1100═1300
+int i = 0;
 
-    // RPM ZONE:
-    // Idle = [1100═1300)
-    // Normal = [1300═8000)
-    // High = [8000═14500)
-    // Redline = [14500═16500)
-
-    // Engine Temp:
-    // Cold < 60 deg C
-    // Normal 60 ═ 95
-    // Hot 95 ═ 105
-    // Overheat > 105
-
-    // Time:
-    // Time Elapsed overall = random value everytime program starts
-    // Time Elapsed current = time since vehicle turned on
-    // HH:MM:SS
-
-    // Speed:
-    // Engine off = 0
-    // Between 0 ═ 200 mph
-
-    // Fuel:
-    // Visually as a bar and numbers
-    // 0 ═ 4.7 gal
-    // If fuel < 0.7 indicate low on fuel
-
-    // Distance Traveled:
-    // Total = random
-    // Current trip distance = distance from vehicle turned on
-    // Update both as vehicle is moving
-    // Current trip distance alway 0 at start
-
-    // Signal State:
-    // Left, Right, Off
-    // Hazards = Both left/right
-
-    // Headlight:
-    // on/off
-
-    // Group of Three
-    // Hybrid Assist System:
-    // Battery Level (num)
-    // Electric Asist State (on/off)
-    // Chargin state (on/off)
-    // Hybrid assist mode
-
-    // Event Logging Subsystem:
-    // Display most recent events`
-
+void print_dashboard()
+{
     printf("╔═════════════════════════════════════════════════════════════════════════════╗\n");
     printf("║                                GEEKERS OS                                   ║\n");
     printf("║═════════════════════════════════════════════════════════════════════════════║\n");
@@ -376,4 +436,65 @@ int main()
     printf("║ 2. Left blinker activated                                                   ║\n");
     printf("║ 3. Speed reached 68 mph                                                     ║\n");
     printf("╚═════════════════════════════════════════════════════════════════════════════╝\n");
+    i += 1;
 }
+
+// MAIN FUNCTION
+int main()
+{
+    while (1)
+    {
+        refresh_dashboard(print_dashboard);
+        usleep(100000); // refresh every 1 second
+    }
+}
+
+// engine state ═ on/off
+
+// RPM ═ if engine = off rpm = 0
+// if on not moving 1100═1300
+
+// RPM ═ if engine = off rpm = 0
+// if on not moving 1100═1300
+
+// RPM ZONE:
+// Idle = [1100═1300)
+// Normal = [1300═8000)
+// High = [8000═14500)
+// Redline = [14500═16500)
+
+// Engine Temp:
+// Cold < 60 deg C
+// Normal 60 ═ 95
+// Hot 95 ═ 105
+// Overheat > 105
+
+// Time:
+// Time Elapsed overall = random value everytime program starts
+// Time Elapsed current = time since vehicle turned on
+// HH:MM:SS
+
+// Speed:
+// Engine off = 0
+// Between 0 ═ 200 mph
+
+// Fuel:
+// Visually as a bar and numbers
+// 0 ═ 4.7 gal
+// If fuel < 0.7 indicate low on fuel
+
+// Distance Traveled:
+// Total = random
+// Current trip distance = distance from vehicle turned on
+// Update both as vehicle is moving
+// Current trip distance alway 0 at start
+
+// Signal State:
+// Left, Right, Off
+// Hazards = Both left/right
+
+// Headlight:
+// on/off
+
+// Event Logging Subsystem:
+// Display most recent events`
