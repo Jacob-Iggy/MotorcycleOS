@@ -56,8 +56,55 @@ int wheelSlipDetected; // variable to store if wheel slip is detected, 0 = no sl
 //Engine Subsystem (Nick)
 
 //Motion Subsystem (Logan)
+void *motion_thread(void* arg) {
+    while (1) {
+        //check what the current speed is
+        //50mph -> increase
+        //70mph -> decrease
+        if (speed == 50) {
+            while (speed >= 50 && speed < 70) {
+                //sleep for 1 second then increment speed
+                usleep (100000);
+                speed++;
+                //calculate distance
+                //NOTE: speed is in mph so need to calculate distance covered every second
+                //to match dashboard refreshes
+                float distance = speed / 3600;
+                //update distance counters
+                distance_total += distance;
+                distance_trip += distance;
+            }
+        } else if (speed == 70) {
+            while (speed <= 70 && speed > 50) {
+                //sleep for 1 second then decrement speed
+                usleep (100000);
+                speed--;
+                //calculate distance
+                float distance = speed / 3600;
+                //update distance counters
+                distance_total += distance;
+                distance_trip += distance;
+            }
+        }
+    }
+    return NULL;
+}
 
 //Fuel Subsystem (Logan)
+void *fuel_thread(void* arg) {
+    while (1) {
+        if (rpm_zone == 0) { //Idle = [1100═1300)
+            fuel -= 0.02;
+        } else if (rpm_zone == 1) { //Normal = [1300═8000)
+            fuel -= 0.05;
+        } else if (rpm_zone == 2) { //High = [8000═14500)
+            fuel -= 0.07;
+        } else if (rpm_zone == 3) { //Redline = [14500═16500)
+            fuel -= 0.09;
+        }
+    }
+    return NULL;
+}
 
 //Dashboard Subsystem (Nick)
 
@@ -150,6 +197,37 @@ void* ecu_thread(void* arg) {
 }
 
 //Hybrid Assist System Subsystem (Logan)
+void *hybrid_assis_thread(void* arg) {
+    while (1) {
+        //Low-Speed Electric Cruising
+        if (speed > 0 && speed <= 30) {
+            //set the electric assist state to on
+            electric_assist_state = 1;
+            //set hybrid mode
+            hybrid_mode = 1;
+            //vehicle uses battery assist so battery gets drained
+            battery_level - 0.05;
+        }
+
+        //Electric Assist During Acceleration
+        if (speed > 30 && speed <= 60) {
+            electric_assist_state = 1;
+            hybrid_mode = 2;
+            battery_level - 0.07;
+        } else if (speed > 60 && speed <= 90) {
+            electric_assist_state = 1;
+            hybrid_mode = 2;
+            battery_level - 0.09;
+        }
+
+        //Regenerative Charging
+        if (hybrid_mode == 3) {
+            //recharging state so charge battery incrementally
+            battery_level += 0.05;
+        }
+    }
+    return NULL;
+}
 
 //Event Logging Subsystem (Jacob)
 void* event_thread(void* arg) {
@@ -242,8 +320,50 @@ void* event_thread(void* arg) {
      return NULL;
 }
 
+//Dashboard Subsystem
+//code from assignment
+void refresh_dashboard ( void (* print_dashboard ) ( void ) ) {
+    // The below print statement moves the cursor to top left and clears the screen
+    printf ( " \033[ H \033[ J " ) ;
+    // Reprint dashboard
+    print_dashboard () ;
+    // Force output to display immediately
+    fflush ( stdout ) ;
+}
+
+int i = 0;
+
+void print_dashboard () {
+    printf("╔═════════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║                                GEEKERS OS                                   ║\n");
+    printf("║═════════════════════════════════════════════════════════════════════════════║\n");
+    printf("║ ENG ●        TMP 96°C (HOT)        RPM 7200 (IDLE)        SPD 68 mph        ║\n");
+    printf("║ FUEL   [██████████░░░░░░░░] LOW     DIST 21.3 km                             ║\n");
+    printf("║ TIME ELAPSED (TOTAL):   82:41:12                                           ║\n");
+    printf("║ TIME ELAPSED (TRIP):    00:34:52                                            ║\n");
+    printf("║ SIGNAL: ◄ LEFT BLINK        HEADLIGHT: ● ON                                 ║\n");
+    printf("║══════════════════════════ HYBRID ASSIST SYSTEM ═════════════════════════════║\n");
+    printf("║ BATTERY LEVEL     [████████░░░░] 74%%                                        ║\n");
+    printf("║ ELECTRIC ASSIST   ON                                                        ║\n");
+    printf("║ CHARGING STATE    OFF                                                       ║\n");
+    printf("║ HYBRID MODE       ASSIST                                                    ║\n");
+    printf("║═══════════════════════════════ EVENT LOG ═══════════════════════════════════║\n");
+    printf("║ 1. Engine started                                                           ║\n");
+    printf("║ 2. Left blinker activated                                                   ║\n");
+    printf("║ 3. Speed reached 68 mph                                                     ║\n");
+    printf("╚═════════════════════════════════════════════════════════════════════════════╝\n");
+    i += 1;
+}
+
 //MAIN FUNCTION
-int main() {
+int main () {
+    while (1) {
+        refresh_dashboard ( print_dashboard ) ;
+        usleep (100000) ; // refresh every 1 second
+    }
+}
+
+
     //engine state ═ on/off
     
     //RPM ═ if engine = off rpm = 0
@@ -297,23 +417,3 @@ int main() {
 
     //Event Logging Subsystem:
     //Display most recent events`
-
-    printf("╔═════════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║                                GEEKERS OS                                   ║\n");
-    printf("║═════════════════════════════════════════════════════════════════════════════║\n");
-    printf("║ ENG ●        TMP 96°C (HOT)        RPM 7200 (IDLE)        SPD 68 mph        ║\n");
-    printf("║ FUEL   [██████████░░░░░░░░] LOW     DIST 21.3 km                             ║\n");
-    printf("║ TIME ELAPSED (TOTAL):   82:41:12                                           ║\n");
-    printf("║ TIME ELAPSED (TRIP):    00:34:52                                            ║\n");
-    printf("║ SIGNAL: ◄ LEFT BLINK        HEADLIGHT: ● ON                                 ║\n");
-    printf("║══════════════════════════ HYBRID ASSIST SYSTEM ═════════════════════════════║\n");
-    printf("║ BATTERY LEVEL     [████████░░░░] 74%%                                        ║\n");
-    printf("║ ELECTRIC ASSIST   ON                                                        ║\n");
-    printf("║ CHARGING STATE    OFF                                                       ║\n");
-    printf("║ HYBRID MODE       ASSIST                                                    ║\n");
-    printf("║═══════════════════════════════ EVENT LOG ═══════════════════════════════════║\n");
-    printf("║ 1. Engine started                                                           ║\n");
-    printf("║ 2. Left blinker activated                                                   ║\n");
-    printf("║ 3. Speed reached 68 mph                                                     ║\n");
-    printf("╚═════════════════════════════════════════════════════════════════════════════╝\n");
-}
