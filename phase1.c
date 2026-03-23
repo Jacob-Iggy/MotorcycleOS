@@ -149,7 +149,7 @@ void *motion_thread(void *arg)
             while (speed >= 50 && speed < 70)
             {
 				// sleep for 1 second then increment speed
-                usleep(100000);
+                sleep(1);
                 speed++;
                 // calculate distance
                 // NOTE: speed is in mph so need to calculate distance covered every second
@@ -165,7 +165,7 @@ void *motion_thread(void *arg)
             while (speed <= 70 && speed > 50)
             {
 				// sleep for 1 second then increment speed
-                usleep(100000);
+                sleep(1);
                 speed--;
                 // calculate distance
                 float distance = (float)speed / 3600;
@@ -205,7 +205,7 @@ void *fuel_thread(void *arg)
 			engine_state = 0;
 		}
 		// sleep for 1 second then decrement speed
-        usleep(100000);
+		sleep(1);
     }
     return NULL;
 }
