@@ -57,58 +57,80 @@ int battery_warning_logged;         // variable to track if low battery warning 
 // THREADS NEEDED
 
 // Engine Subsystem (Nick)
-//engine subsystem - updates RPM, temps, simulates idle to high
-void* engine_thread(void* arg) {
+// engine subsystem - updates RPM, temps, simulates idle to high
+void *engine_thread(void *arg)
+{
 
-    int rpm_direction = 1; //1 = rpms increase, -1 = rpms decrease
+    int rpm_direction = 1; // 1 = rpms increase, -1 = rpms decrease
 
-    while (1) {
-        if (engine_state == 0) {
+    while (1)
+    {
+        if (engine_state == 0)
+        {
             // if engines off rpms go down by 150 until at 0 and temps lower
-            if (rpm > 0) {
+            if (rpm > 0)
+            {
                 rpm -= 150;
-                if (rpm < 0) rpm = 0;
+                if (rpm < 0)
+                    rpm = 0;
             }
-            if (engine_temp > 20) {
+            if (engine_temp > 20)
+            {
                 engine_temp -= 1;
             }
-
-        } else {
-            //simulates increasing rpms for phase 1
+        }
+        else
+        {
+            // simulates increasing rpms for phase 1
             rpm += rpm_direction * 150;
 
-            //lowers rpms back down for simulation and repeats
-            if (rpm >= 8500) {
+            // lowers rpms back down for simulation and repeats
+            if (rpm >= 8500)
+            {
                 rpm = 8500;
                 rpm_direction = -1;
-            } else if (rpm <= 1200) {
+            }
+            else if (rpm <= 1200)
+            {
                 rpm = 1200;
                 rpm_direction = 1;
             }
 
-            //if decreases or increases wrong sets to max and mins
-            if (rpm < 1100)  rpm = 1100;
-            if (rpm > 16500) rpm = 16500;
+            // if decreases or increases wrong sets to max and mins
+            if (rpm < 1100)
+                rpm = 1100;
+            if (rpm > 16500)
+                rpm = 16500;
 
-            //rpm zones connect to temps, the higher zone the faster engine increases in temp, vice versa but idle lets it cool
-            if (rpm_zone == 3) {
+            // rpm zones connect to temps, the higher zone the faster engine increases in temp, vice versa but idle lets it cool
+            if (rpm_zone == 3)
+            {
                 engine_temp += 3;
-            } else if (rpm_zone == 2) {
+            }
+            else if (rpm_zone == 2)
+            {
                 engine_temp += 2;
-            } else if (rpm_zone == 1) {
-                if (engine_temp < 88) {
+            }
+            else if (rpm_zone == 1)
+            {
+                if (engine_temp < 88)
+                {
                     engine_temp += 1;
                 }
-            } else if (rpm_zone == 0) {
-                if (engine_temp > 75) {
+            }
+            else if (rpm_zone == 0)
+            {
+                if (engine_temp > 75)
+                {
                     engine_temp -= 1;
                 }
             }
-            //max of 130 degrees
-            if (engine_temp > 130) engine_temp = 130;
+            // max of 130 degrees
+            if (engine_temp > 130)
+                engine_temp = 130;
         }
 
-        sleep(1); //update every second
+        sleep(1); // update every second
     }
 
     return NULL;
@@ -193,6 +215,7 @@ void *ecu_thread(void *arg)
         {
             rpm = 0;
             speed = 0;
+            rpm_zone = -1;
         }
 
         // this part updates the RPM zone based on the current RPM value
@@ -201,11 +224,15 @@ void *ecu_thread(void *arg)
             // IDLE
             if (rpm_zone != 0)
             {
-                if (rpm_zone != 0)
+                if (rpm_zone == -1)
+                {
+                    newRPMZone = 1; // set to increment if we are moving up from engine off
+                }
+                else
                 {
                     newRPMZone = 2; // set to decrement if we are leaving a higher zone
-                    rpm_zone = 0;
                 }
+                rpm_zone = 0;
             }
         }
         else if (rpm >= 1300 && rpm < 8000)
@@ -304,7 +331,7 @@ void *ecu_thread(void *arg)
 }
 
 // Hybrid Assist System Subsystem (Logan)
-void *hybrid_assis_thread(void *arg)
+void *hybrid_assist_thread(void *arg)
 {
     while (1)
     {
@@ -343,6 +370,19 @@ void *hybrid_assis_thread(void *arg)
     return NULL;
 }
 
+void push_event(const struct Event *newEvent)
+{
+    if (event_count < MAX_EVENTS)
+    {
+        event_log[event_count] = *newEvent;
+        event_count++;
+        return;
+    }
+
+    memmove(&event_log[0], &event_log[1], sizeof(struct Event) * (MAX_EVENTS - 1));
+    event_log[MAX_EVENTS - 1] = *newEvent;
+}
+
 // Event Logging Subsystem (Jacob)
 void *event_thread(void *arg)
 {
@@ -359,8 +399,7 @@ void *event_thread(void *arg)
                 sprintf(newEvent.description, "RPM zone increased to %d", rpm_zone);
                 // set timestamp for the event here
                 newEvent.timestamp = time_elapsed_trip;
-                event_log[event_count] = newEvent;
-                event_count++;
+                push_event(&newEvent);
             }
             else if (newRPMZone == 2)
             {
@@ -370,11 +409,9 @@ void *event_thread(void *arg)
                 sprintf(newEvent.description, "RPM zone decreased to %d", rpm_zone);
                 // set timestamp for the event here
                 newEvent.timestamp = time_elapsed_trip;
-                event_log[event_count] = newEvent;
-                event_count++;
-
-                newRPMZone = 0; // reset the variable after handling the event
+                push_event(&newEvent);
             }
+            newRPMZone = 0; // reset the variable after handling the event
         }
 
         if (hybridAssistChange != 0)
@@ -392,8 +429,7 @@ void *event_thread(void *arg)
             }
             // set timestamp for the event here
             newEvent.timestamp = time_elapsed_trip;
-            event_log[event_count] = newEvent;
-            event_count++;
+            push_event(&newEvent);
 
             hybridAssistChange = 0; // reset the variable after handling the event
         }
@@ -405,8 +441,7 @@ void *event_thread(void *arg)
             sprintf(newEvent.description, "Fuel level low at %.2f gallons", fuel);
             // set timestamp for the event here
             newEvent.timestamp = time_elapsed_trip;
-            event_log[event_count] = newEvent;
-            event_count++;
+            push_event(&newEvent);
             fuel_warning_logged = 1;
         }
         else if (fuel >= 0.7 && fuel_warning_logged)
@@ -421,8 +456,7 @@ void *event_thread(void *arg)
             sprintf(newEvent.description, "Battery level low at %d%%", battery_level);
             // set timestamp for the event here
             newEvent.timestamp = time_elapsed_trip;
-            event_log[event_count] = newEvent;
-            event_count++;
+            push_event(&newEvent);
             battery_warning_logged = 1;
         }
         else if (battery_level >= 10 && battery_warning_logged)
@@ -437,8 +471,7 @@ void *event_thread(void *arg)
             sprintf(newEvent.description, "Engine temperature critical at %d°C", engine_temp);
             // set timestamp for the event here
             newEvent.timestamp = time_elapsed_trip;
-            event_log[event_count] = newEvent;
-            event_count++;
+            push_event(&newEvent);
         }
 
         if (wheelSlipDetected == 1)
@@ -448,73 +481,98 @@ void *event_thread(void *arg)
             sprintf(newEvent.description, "Wheel slip detected at speed %d mph", speed);
             // set timestamp for the event here
             newEvent.timestamp = time_elapsed_trip;
-            event_log[event_count] = newEvent;
-            event_count++;
+            push_event(&newEvent);
         }
+
+        usleep(100000);
     }
 
     return NULL;
 }
 
 // Dashboard Subsystem
-//prints dashboard
-void print_dashboard(void) {
+// prints dashboard
+void print_dashboard(void)
+{
 
     char *eng_status = (engine_state == 1) ? "ON " : "OFF";
 
     char *signal_label;
-    if      (signal_state == 1) signal_label = "< LEFT      ";
-    else if (signal_state == 2) signal_label = "RIGHT >     ";
-    else if (signal_state == 3) signal_label = "< HAZARD >  ";
-    else                        signal_label = "OFF         ";
+    if (signal_state == 1)
+        signal_label = "< LEFT      ";
+    else if (signal_state == 2)
+        signal_label = "RIGHT >     ";
+    else if (signal_state == 3)
+        signal_label = "< HAZARD >  ";
+    else
+        signal_label = "OFF         ";
 
     char *headlight_label = (headlight_state == 1) ? "* ON " : "o OFF";
 
     char *temp_zone_label;
-    if      (engine_temp_zone == 0) temp_zone_label = "COLD    ";
-    else if (engine_temp_zone == 1) temp_zone_label = "NORMAL  ";
-    else if (engine_temp_zone == 2) temp_zone_label = "HOT     ";
-    else                            temp_zone_label = "OVERHEAT";
+    if (engine_temp_zone == 0)
+        temp_zone_label = "COLD    ";
+    else if (engine_temp_zone == 1)
+        temp_zone_label = "NORMAL  ";
+    else if (engine_temp_zone == 2)
+        temp_zone_label = "HOT     ";
+    else
+        temp_zone_label = "OVERHEAT";
 
     char *rpm_zone_label;
-    if      (rpm_zone == 0) rpm_zone_label = "IDLE   ";
-    else if (rpm_zone == 1) rpm_zone_label = "NORMAL ";
-    else if (rpm_zone == 2) rpm_zone_label = "HIGH   ";
-    else if (rpm_zone == 3) rpm_zone_label = "REDLINE";
-    else                    rpm_zone_label = "OFF    ";
+    if (rpm_zone == 0)
+        rpm_zone_label = "IDLE   ";
+    else if (rpm_zone == 1)
+        rpm_zone_label = "NORMAL ";
+    else if (rpm_zone == 2)
+        rpm_zone_label = "HIGH   ";
+    else if (rpm_zone == 3)
+        rpm_zone_label = "REDLINE";
+    else
+        rpm_zone_label = "OFF    ";
 
     char *hybrid_mode_label;
-    if      (hybrid_mode == 1) hybrid_mode_label = "CRUISING    ";
-    else if (hybrid_mode == 2) hybrid_mode_label = "ASSIST      ";
-    else if (hybrid_mode == 3) hybrid_mode_label = "REGENERATION";
-    else                       hybrid_mode_label = "NONE        ";
+    if (hybrid_mode == 1)
+        hybrid_mode_label = "CRUISING    ";
+    else if (hybrid_mode == 2)
+        hybrid_mode_label = "ASSIST      ";
+    else if (hybrid_mode == 3)
+        hybrid_mode_label = "REGENERATION";
+    else
+        hybrid_mode_label = "NONE        ";
 
     char *elec_assist_label = (electric_assist_state == 1) ? "ON " : "OFF";
-    char *charging_label    = (charging_state == 1)        ? "ON " : "OFF";
+    char *charging_label = (charging_state == 1) ? "ON " : "OFF";
 
-    //fuel data (4.7 gal tank)
+    // fuel data (4.7 gal tank)
     char fuel_bar[21];
     int fuel_filled = (int)((fuel / 4.7f) * 20);
-    if (fuel_filled < 0)  fuel_filled = 0;
-    if (fuel_filled > 20) fuel_filled = 20;
-    for (int i = 0; i < 20; i++) {
+    if (fuel_filled < 0)
+        fuel_filled = 0;
+    if (fuel_filled > 20)
+        fuel_filled = 20;
+    for (int i = 0; i < 20; i++)
+    {
         fuel_bar[i] = (i < fuel_filled) ? '#' : '-';
     }
     fuel_bar[20] = '\0';
 
     char *low_fuel_label = (low_fuel_warning == 1) ? "!! LOW FUEL !!" : "              ";
 
-   //battery display
+    // battery display
     char batt_bar[21];
     int batt_filled = (battery_level * 20) / 100;
-    if (batt_filled < 0)  batt_filled = 0;
-    if (batt_filled > 20) batt_filled = 20;
-    for (int i = 0; i < 20; i++) {
+    if (batt_filled < 0)
+        batt_filled = 0;
+    if (batt_filled > 20)
+        batt_filled = 20;
+    for (int i = 0; i < 20; i++)
+    {
         batt_bar[i] = (i < batt_filled) ? '#' : '-';
     }
     batt_bar[20] = '\0';
 
-    //print dash
+    // print dash
     printf("╔═════════════════════════════════════════════════════════════════════════════╗\n");
     printf("║                                GEEKERS OS                                  ║\n");
     printf("║═════════════════════════════════════════════════════════════════════════════║\n");
@@ -542,10 +600,11 @@ void print_dashboard(void) {
            elec_assist_label, charging_label, hybrid_mode_label);
     printf("║═══════════════════════════════ EVENT LOG ═══════════════════════════════════║\n");
 
-    //event log
+    // event log
     int start = (event_count >= 3) ? event_count - 3 : 0;
     int display_num = 1;
-    for (int i = start; i < event_count; i++) {
+    for (int i = start; i < event_count; i++)
+    {
         printf("║  %d. [%02d:%02d:%02d] %-57s  ║\n",
                display_num,
                event_log[i].timestamp.hours,
@@ -554,30 +613,33 @@ void print_dashboard(void) {
                event_log[i].description);
         display_num++;
     }
-    //if less than 3 events leave space
-    for (int i = display_num; i <= 3; i++) {
+    // if less than 3 events leave space
+    for (int i = display_num; i <= 3; i++)
+    {
         printf("║  %d. ---                                                                     ║\n", i);
     }
 
     printf("╚═════════════════════════════════════════════════════════════════════════════╝\n");
 }
 
-//function to refresh dash
-void refresh_dashboard(void (*print_fn)(void)) {
-    //clears screen and moves cursor as given in notes
+// function to refresh dash
+void refresh_dashboard(void (*print_fn)(void))
+{
+    // clears screen and moves cursor as given in notes
     printf("\033[H\033[J");
-    //reprint dash
+    // reprint dash
     print_fn();
-    //display output immediately
+    // display output immediately
     fflush(stdout);
 }
 
-
-//dash subsystem
-void* dashboard_thread(void* arg) {
-    while (1) {
+// dash subsystem
+void *dashboard_thread(void *arg)
+{
+    while (1)
+    {
         refresh_dashboard(print_dashboard);
-        usleep(500000); //refreshes dash every 0.5 sec
+        usleep(500000); // refreshes dash every 0.5 sec
     }
     return NULL;
 }
@@ -585,62 +647,62 @@ void* dashboard_thread(void* arg) {
 // MAIN FUNCTION
 int main()
 {
-    while (1)
-    {
-        refresh_dashboard(print_dashboard);
-        usleep(100000); // refresh every 1 second
-    }
+    srand(time(NULL));
 
-    srand(42);
-
-    engine_state     = 1;
-    rpm              = 1200;  // start at idle RPM
-    rpm_zone         = 0;
-    engine_temp      = 45;    // cold start
+    engine_state = 1;
+    rpm = 1200; // start at idle RPM
+    rpm_zone = 0;
+    engine_temp = 45; // cold start
     engine_temp_zone = 0;
 
-    speed            = 0;
-    fuel             = 3.5f;
+    speed = 0;
+    fuel = 3.5f;
     low_fuel_warning = 0;
 
-    //Total distance - random start val
+    // Total distance - random start val
     distance_total = (float)(rand() % 10000 + 1000);
-    distance_trip  = 0.0f;
+    distance_trip = 0.0f;
 
-    //Total time elapsed - random starting value (HH:MM:SS)
-    time_elapsed_total.hours   = rand() % 100;
+    // Total time elapsed - random starting value (HH:MM:SS)
+    time_elapsed_total.hours = rand() % 100;
     time_elapsed_total.minutes = rand() % 60;
     time_elapsed_total.seconds = rand() % 60;
 
-    //Trip time always starts at zero
-    time_elapsed_trip.hours   = 0;
+    // Trip time always starts at zero
+    time_elapsed_trip.hours = 0;
     time_elapsed_trip.minutes = 0;
     time_elapsed_trip.seconds = 0;
 
-    signal_state          = 0;
-    headlight_state       = 1;
-    battery_level         = 74;
+    signal_state = 0;
+    headlight_state = 1;
+    battery_level = 74;
     electric_assist_state = 1;
-    charging_state        = 0;
-    hybrid_mode           = 2; //hybrid assist
+    charging_state = 0;
+    hybrid_mode = 2; // hybrid assist
 
-    event_count        = 0;
-    newRPMZone         = 0;
+    event_count = 0;
+    newRPMZone = 0;
     hybridAssistChange = 0;
-    wheelSlipDetected  = 0;
+    wheelSlipDetected = 0;
 
-    //create threads
-    pthread_t engine_tid, dashboard_tid, ecu_tid, event_tid;
+    // create threads
+    pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid, event_tid, dashboard_tid;
 
-    pthread_create(&engine_tid,    NULL, engine_thread,    NULL);
-    pthread_create(&ecu_tid,       NULL, ecu_thread,       NULL);
-    pthread_create(&event_tid,     NULL, event_thread,     NULL);
+    pthread_create(&engine_tid, NULL, engine_thread, NULL);
+    pthread_create(&motion_tid, NULL, motion_thread, NULL);
+    pthread_create(&fuel_tid, NULL, fuel_thread, NULL);
+    pthread_create(&ecu_tid, NULL, ecu_thread, NULL);
+    pthread_create(&hybrid_assist_tid, NULL, hybrid_assist_thread, NULL);
+    pthread_create(&event_tid, NULL, event_thread, NULL);
     pthread_create(&dashboard_tid, NULL, dashboard_thread, NULL);
 
-    //Wait (threads run indefinitely)
-    pthread_join(engine_tid,    NULL);
-    pthread_join(ecu_tid,       NULL);
-    pthread_join(event_tid,     NULL);
+    // Wait (threads run indefinitely)
+    pthread_join(engine_tid, NULL);
+    pthread_join(motion_tid, NULL);
+    pthread_join(fuel_tid, NULL);
+    pthread_join(ecu_tid, NULL);
+    pthread_join(hybrid_assist_tid, NULL);
+    pthread_join(event_tid, NULL);
     pthread_join(dashboard_tid, NULL);
 
     return 0;
