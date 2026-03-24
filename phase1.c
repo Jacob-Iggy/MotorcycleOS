@@ -40,10 +40,13 @@ float distance_total;           // in miles
 float distance_trip;            // in miles
 int signal_state;               // 0 = off, 1 = left, 2 = right, 3 = hazards
 int headlight_state;            // 0 = off, 1 = on
-int battery_level;              // in percentage, 0-100
+float battery_level;              // in percentage, 0-100
 int electric_assist_state;      // 0 = off, 1 = on
 int charging_state;             // 0 = off, 1 = on
 int hybrid_mode;                // 0 = none, 1 = cruising, 2 = assist, 3 = regeneration
+
+//direction global variable for motion and hybrid assist
+int direction;
 
 // Event System Variables
 struct Event event_log[MAX_EVENTS]; // array to store event logs
@@ -139,9 +142,9 @@ void *engine_thread(void *arg)
 // Motion Subsystem (Logan)
 void *motion_thread(void *arg)
 {
-	//variable to determine direction
+	//determine direction
 	//1 = accelerate, -1 = decelerate
-	int direction = 1;
+	direction = 1;
     while (1)
     {
 		sleep(1);
@@ -332,20 +335,19 @@ void *ecu_thread(void *arg)
 // Hybrid Assist System Subsystem (Logan)
 void *hybrid_assist_thread(void *arg)
 {
-	//keep track of previous speed to determine regeneration state
-	int previous_speed = speed;
 	//keep track of previous mode for ECU
 	int previous_mode = hybrid_mode;
     while (1)
     {
 		//check if speed is decreasing
-		if (speed < previous_speed) {
+		//utilize direction variable from motion subsystem
+		if (direction == -1) {
 			// REGENERATION
             hybrid_mode = 3;
             electric_assist_state = 0;
             charging_state = 1;
             battery_level += 0.07;
-		}  else if (speed > previous_speed) { //hanlde all cases for hybrid assist
+		}  else if (direction == 1) { //hanlde all cases for hybrid assist
 			if (speed > 0 && speed <= 30) { //Low-Speed Electric Cruising
 				//set the electric assist state to on
                 electric_assist_state = 1;
@@ -377,9 +379,6 @@ void *hybrid_assist_thread(void *arg)
 			}
             previous_mode = hybrid_mode;
         }
-
-		//update previous speed
-		previous_speed = speed;
 
         //make sure battery cant go below 0 and above 100
 		if (battery_level > 100) battery_level = 100;
@@ -473,7 +472,7 @@ void *event_thread(void *arg)
         {
             struct Event newEvent;
             sprintf(newEvent.title, "Low Battery Warning");
-            sprintf(newEvent.description, "Battery level low at %d%%", battery_level);
+            sprintf(newEvent.description, "Battery level low at %f%%", battery_level);
             // set timestamp for the event here
             newEvent.timestamp = time_elapsed_trip;
             push_event(&newEvent);
@@ -614,7 +613,7 @@ void print_dashboard(void)
     printf("║  SIGNAL: %-12s       HEADLIGHT: %-5s                              ║\n",
            signal_label, headlight_label);
     printf("║═══════════════════════════ HYBRID ASSIST SYSTEM ════════════════════════════║\n");
-    printf("║  BATTERY  [%-20s]  %3d%%                                       ║\n",
+    printf("║  BATTERY  [%-20s]  %3.2f%%                                       ║\n",
            batt_bar, battery_level);
     printf("║  ELECTRIC ASSIST: %-3s    CHARGING: %-3s    HYBRID MODE: %-12s     ║\n",
            elec_assist_label, charging_label, hybrid_mode_label);
