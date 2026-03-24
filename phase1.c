@@ -332,39 +332,60 @@ void *ecu_thread(void *arg)
 // Hybrid Assist System Subsystem (Logan)
 void *hybrid_assist_thread(void *arg)
 {
+	//keep track of previous speed to determine regeneration state
+	int previous_speed = speed;
+	//keep track of previous mode for ECU
+	int previous_mode = hybrid_mode;
     while (1)
     {
-        // Low-Speed Electric Cruising
-        if (speed > 0 && speed <= 30)
-        {
-            // set the electric assist state to on
-            electric_assist_state = 1;
-            // set hybrid mode
-            hybrid_mode = 1;
-            // vehicle uses battery assist so battery gets drained
-            battery_level - 0.05;
+		//check if speed is decreasing
+		if (speed < previous_speed) {
+			// REGENERATION
+            hybrid_mode = 3;
+            electric_assist_state = 0;
+            charging_state = 1;
+            battery_level += 0.07;
+		}  else if (speed > previous_speed) { //hanlde all cases for hybrid assist
+			if (speed > 0 && speed <= 30) { //Low-Speed Electric Cruising
+				//set the electric assist state to on
+                electric_assist_state = 1;
+                //set hybrid mode
+                hybrid_mode = 1;
+			    //make sure charging state is off
+			    charging_state = 0;
+                //vehicle uses battery assist so battery gets drained
+                battery_level -= 0.05;
+        	} else if (speed > 30 && speed <= 60) { // Electric Assist During Acceleration
+                electric_assist_state = 1;
+                hybrid_mode = 2;
+			    charging_state = 0;
+                battery_level -= 0.07;
+        	} else if (speed > 60 && speed <= 90) {
+                electric_assist_state = 1;
+                hybrid_mode = 2;
+			    charging_state = 0;
+                battery_level -= 0.09;
+        	}
+		}
+
+		//check hybrid mode for ECU
+        if (hybrid_mode != previous_mode) {
+            if (hybrid_mode == 0) {
+                hybridAssistChange = 2;
+			} else {
+                hybridAssistChange = 1;
+			}
+            previous_mode = hybrid_mode;
         }
 
-        // Electric Assist During Acceleration
-        if (speed > 30 && speed <= 60)
-        {
-            electric_assist_state = 1;
-            hybrid_mode = 2;
-            battery_level - 0.07;
-        }
-        else if (speed > 60 && speed <= 90)
-        {
-            electric_assist_state = 1;
-            hybrid_mode = 2;
-            battery_level - 0.09;
-        }
+		//update previous speed
+		previous_speed = speed;
 
-        // Regenerative Charging
-        if (hybrid_mode == 3)
-        {
-            // recharging state so charge battery incrementally
-            battery_level += 0.05;
-        }
+        //make sure battery cant go below 0 and above 100
+		if (battery_level > 100) battery_level = 100;
+        if (battery_level < 0) battery_level = 0;
+
+		sleep(1);
     }
     return NULL;
 }
