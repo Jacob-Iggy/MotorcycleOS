@@ -179,6 +179,16 @@ void *motion_thread(void *arg)
     // update distance counters
     distance_total += distance;
     distance_trip += distance;
+
+	//ensure the speed never gets out of defined bounds 0-200
+	//this isnt possible due to the instructions for this thread but the range
+	//was mentioned in assignment
+	if (speed <= 0) {
+		speed = 0;
+	}
+	if (speed >= 200) {
+		speed = 200;
+	}
   }
   return NULL;
 }
