@@ -47,6 +47,7 @@ int signal_state;               // 0 = off, 1 = left, 2 = right, 3 = hazards
 int headlight_state;            // 0 = off, 1 = on
 float battery_level;            // in percentage, 0-100
 int electric_assist_state;      // 0 = off, 1 = on
+int electric_assist_allowed;    // 0 = not allowed, 1 = allowed based on conditions
 int charging_state;             // 0 = off, 1 = on
 int hybrid_mode;                // 0 = none, 1 = cruising, 2 = assist, 3 = regeneration
 
@@ -66,8 +67,12 @@ float last_fuel_amount_logged;      // variable to track what the last low fuel
                                     // warning was logged at
 float last_battery_amount_logged;   // variable to track what the last low battery
                                     // warning was logged at
+int ecu_update;                     // variable to track if something has changed like fuel or speed so the ecu must go through and check the system status
+int engine_off_decelerate;          // variable to track if the engine was just turned off and speed isn't 0, we must decelarate
+int max_speed;                      // variable to limit max speed, changed by ecu if overheating
+int max_rpm;                        // variable to limit max rpm, changed by ecu if overheating
 
-//Define all base mutex locks for each major system
+// Define all base mutex locks for each major system
 pthread_mutex_t engineLock;
 pthread_mutex_t motionLock;
 pthread_mutex_t fuelLock;
@@ -76,7 +81,13 @@ pthread_mutex_t hybridAssistLock;
 pthread_mutex_t eventQueueLock;
 pthread_mutex_t dashboardLock;
 
-//Define semaphores needed for sync
+// mutex to protect the conditional variable for ECU
+pthread_mutex_t ecuConditionalLock;
+
+// Define conditional variable for ECU to wait on for if there is a change to check
+pthread_cond_t ecuConditional;
+
+// Define semaphores needed for sync
 sem_t engineRunningSem;
 
 // THREADS NEEDED
@@ -170,15 +181,15 @@ void *motion_thread(void *arg)
   direction = 1;
   while (1)
   {
-	//Wait for the engine to be turned on
-	sem_wait(&engineRunningSem);
+    // Wait for the engine to be turned on
+    sem_wait(&engineRunningSem);
 
-	//================
-	//CRITICAL SECTION
-	//================
+    //================
+    // CRITICAL SECTION
+    //================
 
-	//lock the motion mutex
-	pthread_mutex_lock(&motionLock);
+    // lock the motion mutex
+    pthread_mutex_lock(&motionLock);
     // update speed based on direction
     speed += direction;
     // check what the current speed is
@@ -200,22 +211,24 @@ void *motion_thread(void *arg)
     distance_total += distance;
     distance_trip += distance;
 
-	//ensure the speed never gets out of defined bounds 0-200
-	//this isnt possible due to the instructions for this thread but the range
-	//was mentioned in assignment
-	if (speed <= 0) {
-		speed = 0;
-	}
-	if (speed >= 200) {
-		speed = 200;
-	}
+    // ensure the speed never gets out of defined bounds 0-200
+    // this isnt possible due to the instructions for this thread but the range
+    // was mentioned in assignment
+    if (speed <= 0)
+    {
+      speed = 0;
+    }
+    if (speed >= 200)
+    {
+      speed = 200;
+    }
 
-	pthread_mutex_unlock(&motionLock);
-	//====================
-	//END CRITICAL SECTION
-	//====================
+    pthread_mutex_unlock(&motionLock);
+    //====================
+    // END CRITICAL SECTION
+    //====================
 
-	sleep(1);
+    sleep(1);
   }
   return NULL;
 }
@@ -254,6 +267,15 @@ void *fuel_thread(void *arg)
   return NULL;
 }
 
+// helper function to notify ecu thread of a change that must be looked at, can be called by any subsytem
+void notify_ecu(void)
+{
+  pthread_mutex_lock(&ecuConditionalLock);
+  ecu_update = 1;
+  pthread_cond_signal(&ecuConditional);
+  pthread_mutex_unlock(&ecuConditionalLock);
+}
+
 // ECU Subsystem
 void *ecu_thread(void *arg)
 {
@@ -261,12 +283,34 @@ void *ecu_thread(void *arg)
   while (1)
   {
 
+    // first thing is to lock the conditional lock or wait for it to be signaled
+    pthread_mutex_lock(&ecuConditionalLock);
+
+    // if there isn't an update, we wait for ecu conditional to be signaled and release the lock while waiting
+    while (ecu_update == 0)
+    {
+      pthread_cond_wait(&ecuConditional, &ecuConditionalLock);
+    }
+
+    ecu_update = 0;                            // reset the variable after being signaled and waking up
+    pthread_mutex_unlock(&ecuConditionalLock); // unlock the conditional lock after fully waking up
+
+    // now below are all the things ECU will check through
+
     // if engine is off make sure rpm and speed is at 0
     if (engine_state == 0)
     {
       rpm = 0;
-      speed = 0;
       rpm_zone = -1;
+      if (speed > 0)
+      {
+        engine_off_decelerate = 1; // set the variable to indicate we need to decelerate the speed in motion thread
+      }
+    }
+
+    if (engine_state == 1 && speed == 0)
+    {
+      rpm = 1200; // if engine is on but speed is 0, set to idle rpm
     }
 
     // determine the new rpm zone from rpm
@@ -339,6 +383,13 @@ void *ecu_thread(void *arg)
       engine_temp_zone = 3;
     }
 
+    // if engine is overheating or fuel is low, limit max speed & rpm
+    if (engine_temp_zone == 3 || fuel < 0.7)
+    {
+      max_speed = 80;
+      max_rpm = 8000;
+    }
+
     // if fuel is less than 0.7 gallons, enable the low fuel warning
     if (fuel < 0.7)
     {
@@ -350,7 +401,23 @@ void *ecu_thread(void *arg)
       low_fuel_warning = 0;
     }
 
-    usleep(100000);
+    // hybrid assist system checks
+    // if battery level is less than 20%, disable electric assist and set hybrid mode to none
+    if (battery_level < 20)
+    {
+      electric_assist_allowed = 0;
+      hybrid_mode = 0;
+    }
+    // if engine is off, disable electric assist
+    else if (engine_state == 0)
+    {
+      electric_assist_allowed = 0;
+    }
+    // otherwise, allow electric assist based on conditions in the hybrid assist thread
+    else
+    {
+      electric_assist_allowed = 1;
+    }
   }
 
   return NULL;
@@ -810,6 +877,7 @@ int main()
   headlight_state = 1;
   battery_level = 74;
   electric_assist_state = 1;
+  electric_assist_allowed = 0;
   charging_state = 0;
   hybrid_mode = 2; // hybrid assist
 
@@ -819,22 +887,30 @@ int main()
   wheelSlipDetected = 0;
   last_fuel_amount_logged = -1;
   last_battery_amount_logged = -1;
+  ecu_update = 1; // set to 1 so ecu begins by checking initial conditions
+  engine_off_decelerate = 0;
+  max_speed = 200;
+  max_rpm = 16500;
 
-//initialize all mutex's
-pthread_mutex_init(&engineLock, NULL);
-pthread_mutex_init(&motionLock, NULL);
-pthread_mutex_init(&fuelLock, NULL);
-pthread_mutex_init(&ecuLock, NULL);
-pthread_mutex_init(&hybridAssistLock, NULL);
-pthread_mutex_init(&eventQueueLock, NULL);
-pthread_mutex_init(&dashboardLock, NULL);
+  // initialize all mutex's
+  pthread_mutex_init(&engineLock, NULL);
+  pthread_mutex_init(&motionLock, NULL);
+  pthread_mutex_init(&fuelLock, NULL);
+  pthread_mutex_init(&ecuLock, NULL);
+  pthread_mutex_init(&hybridAssistLock, NULL);
+  pthread_mutex_init(&eventQueueLock, NULL);
+  pthread_mutex_init(&dashboardLock, NULL);
+  pthread_mutex_init(&ecuConditionalLock, NULL);
 
-//initialize any semaphores
-sem_init(&engineRunningSem, 0, 0);
+  // initialize conditionals
+  pthread_cond_init(&ecuConditional, NULL);
 
-//update any semaphores according to how globals are defined at the start of main
-//THIS MIGHT GET UPDATED WHEN I SETUP THE COMMAND LINE THINGS (SECTION 8 OF PDF)
-sem_post(&engineRunningSem); //engine state set to 1 at start so post to sem
+  // initialize any semaphores
+  sem_init(&engineRunningSem, 0, 0);
+
+  // update any semaphores according to how globals are defined at the start of main
+  // THIS MIGHT GET UPDATED WHEN I SETUP THE COMMAND LINE THINGS (SECTION 8 OF PDF)
+  sem_post(&engineRunningSem); // engine state set to 1 at start so post to sem
 
   // create threads
   pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
