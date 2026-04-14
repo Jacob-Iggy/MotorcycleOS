@@ -1,4 +1,4 @@
-// Final Project ═ Phase 1
+// Final Project ═ Phase 2
 // Jacob I.
 // Logan P.
 // Nick D.
@@ -66,9 +66,18 @@ float last_fuel_amount_logged;      // variable to track what the last low fuel
 float last_battery_amount_logged;   // variable to track what the last low battery
                                     // warning was logged at
 
+//Define all mutex locks system
+pthread_mutex_t engineLock;
+pthread_mutex_t motionLock;
+pthread_mutex_t fuelLock;
+pthread_mutex_t ecuLock;
+pthread_mutex_t hybridAssistLock;
+pthread_mutex_t eventQueueLock;
+pthread_mutex_t dashboardLock;
+
 // THREADS NEEDED
 
-// Engine Subsystem (Nick)
+// Engine Subsystem
 // engine subsystem - updates RPM, temps, simulates idle to high
 void *engine_thread(void *arg)
 {
@@ -149,7 +158,7 @@ void *engine_thread(void *arg)
   return NULL;
 }
 
-// Motion Subsystem (Logan)
+// Motion Subsystem
 void *motion_thread(void *arg)
 {
   // determine direction
@@ -193,7 +202,7 @@ void *motion_thread(void *arg)
   return NULL;
 }
 
-// Fuel Subsystem (Logan)
+// Fuel Subsystem
 void *fuel_thread(void *arg)
 {
   while (1)
@@ -227,7 +236,7 @@ void *fuel_thread(void *arg)
   return NULL;
 }
 
-// ECU Subsystem (Jacob)
+// ECU Subsystem
 void *ecu_thread(void *arg)
 {
 
@@ -329,7 +338,7 @@ void *ecu_thread(void *arg)
   return NULL;
 }
 
-// Hybrid Assist System Subsystem (Logan)
+// Hybrid Assist System Subsystem
 void *hybrid_assist_thread(void *arg)
 {
   // keep track of previous mode for ECU
@@ -408,7 +417,7 @@ void push_event(const struct Event *newEvent)
   event_log[MAX_EVENTS - 1] = *newEvent;
 }
 
-// Event Logging Subsystem (Jacob)
+// Event Logging Subsystem
 void *event_thread(void *arg)
 {
 
@@ -792,16 +801,6 @@ int main()
   wheelSlipDetected = 0;
   last_fuel_amount_logged = -1;
   last_battery_amount_logged = -1;
-
-//Define all mutex locks system
-pthread_mutex_t engineLock;
-pthread_mutex_t motionLock;
-pthread_mutex_t fuelLock;
-pthread_mutex_t ecuLock;
-pthread_mutex_t hybridAssistLock;
-pthread_mutex_t eventQueueLock;
-pthread_mutex_t dashboardLock;
-
 
   // create threads
   pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
