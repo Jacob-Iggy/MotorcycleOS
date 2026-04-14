@@ -793,6 +793,16 @@ int main()
   last_fuel_amount_logged = -1;
   last_battery_amount_logged = -1;
 
+//Define all mutex locks system
+pthread_mutex_t engineLock;
+pthread_mutex_t motionLock;
+pthread_mutex_t fuelLock;
+pthread_mutex_t ecuLock;
+pthread_mutex_t hybridAssistLock;
+pthread_mutex_t eventQueueLock;
+pthread_mutex_t dashboardLock;
+
+
   // create threads
   pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
       event_tid, dashboard_tid, time_tid;
