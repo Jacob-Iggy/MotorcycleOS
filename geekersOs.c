@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <semaphore.h>
 
 #define MAX_EVENTS 50
 
@@ -66,7 +67,7 @@ float last_fuel_amount_logged;      // variable to track what the last low fuel
 float last_battery_amount_logged;   // variable to track what the last low battery
                                     // warning was logged at
 
-//Define all mutex locks system
+//Define all base mutex locks for each major system
 pthread_mutex_t engineLock;
 pthread_mutex_t motionLock;
 pthread_mutex_t fuelLock;
@@ -74,6 +75,9 @@ pthread_mutex_t ecuLock;
 pthread_mutex_t hybridAssistLock;
 pthread_mutex_t eventQueueLock;
 pthread_mutex_t dashboardLock;
+
+//Define semaphores needed for sync
+sem_t engineRunningSem;
 
 // THREADS NEEDED
 
@@ -166,8 +170,15 @@ void *motion_thread(void *arg)
   direction = 1;
   while (1)
   {
-    sleep(1);
+	//Wait for the engine to be turned on
+	sem_wait(&engineRunningSem);
 
+	//================
+	//CRITICAL SECTION
+	//================
+
+	//lock the motion mutex
+	pthread_mutex_lock(&motionLock);
     // update speed based on direction
     speed += direction;
     // check what the current speed is
@@ -198,6 +209,13 @@ void *motion_thread(void *arg)
 	if (speed >= 200) {
 		speed = 200;
 	}
+
+	pthread_mutex_unlock(&motionLock);
+	//====================
+	//END CRITICAL SECTION
+	//====================
+
+	sleep(1);
   }
   return NULL;
 }
@@ -801,6 +819,22 @@ int main()
   wheelSlipDetected = 0;
   last_fuel_amount_logged = -1;
   last_battery_amount_logged = -1;
+
+//initialize all mutex's
+pthread_mutex_init(&engineLock, NULL);
+pthread_mutex_init(&motionLock, NULL);
+pthread_mutex_init(&fuelLock, NULL);
+pthread_mutex_init(&ecuLock, NULL);
+pthread_mutex_init(&hybridAssistLock, NULL);
+pthread_mutex_init(&eventQueueLock, NULL);
+pthread_mutex_init(&dashboardLock, NULL);
+
+//initialize any semaphores
+sem_init(&engineRunningSem, 0, 0);
+
+//update any semaphores according to how globals are defined at the start of main
+//THIS MIGHT GET UPDATED WHEN I SETUP THE COMMAND LINE THINGS (SECTION 8 OF PDF)
+sem_post(&engineRunningSem); //engine state set to 1 at start so post to sem
 
   // create threads
   pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
