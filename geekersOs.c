@@ -57,6 +57,8 @@ int direction;
 // Event System Variables
 struct Event event_log[MAX_EVENTS]; // array to store event logs
 int event_count;                    // number of events in the log
+struct Event event_queue[5];        // queue to store events that need to be processed by the event thread, 5 events max in the queue
+int event_queue_count;              // number of events currently in the queue
 int newRPMZone;                     // variable to store if an rpm zone update event has been
                                     // triggered, 0 = no update, 1 = increment, 2 = decrement
 int hybridAssistChange;             // variable to store if hybrid assist mode changes, 0 =
@@ -78,14 +80,22 @@ pthread_mutex_t motionLock;
 pthread_mutex_t fuelLock;
 pthread_mutex_t ecuLock;
 pthread_mutex_t hybridAssistLock;
-pthread_mutex_t eventQueueLock;
 pthread_mutex_t dashboardLock;
 
 // mutex to protect the conditional variable for ECU
 pthread_mutex_t ecuConditionalLock;
 
+// mutex to protect event queue
+pthread_mutex_t eventQueueLock;
+
 // Define conditional variable for ECU to wait on for if there is a change to check
 pthread_cond_t ecuConditional;
+
+// Define conditional variable to signal event thread when there is a new event in the queue
+pthread_cond_t eventQueueConditional;
+
+// Define conditional variable to signal when the event queue is not full and can accept new events
+pthread_cond_t eventQueueNotFullConditional;
 
 // Define semaphores needed for sync
 sem_t engineRunningSem;
@@ -488,18 +498,24 @@ void *hybrid_assist_thread(void *arg)
   return NULL;
 }
 
-void push_event(const struct Event *newEvent)
+void enqueue_event(const struct Event *newEvent)
 {
-  if (event_count < MAX_EVENTS)
+  // first lock the event queue mutex to ensure exclusive access to the queue
+  pthread_mutex_lock(&eventQueueLock);
+
+  // wait until there is open space in the event queue, if the queue is full we wait on the eventQueueNotFullConditional and release the lock while waiting
+  while (event_queue_count >= 5)
   {
-    event_log[event_count] = *newEvent;
-    event_count++;
-    return;
+    pthread_cond_wait(&eventQueueNotFullConditional, &eventQueueLock);
   }
 
-  memmove(&event_log[0], &event_log[1],
-          sizeof(struct Event) * (MAX_EVENTS - 1));
-  event_log[MAX_EVENTS - 1] = *newEvent;
+  // once there is space we add our event to the back of the queue
+  event_queue[event_queue_count] = *newEvent;
+  event_queue_count++;
+
+  // then we signal that there is a new event in the queue and we unlock the mutex
+  pthread_cond_signal(&eventQueueConditional);
+  pthread_mutex_unlock(&eventQueueLock);
 }
 
 // Event Logging Subsystem
@@ -508,111 +524,34 @@ void *event_thread(void *arg)
 
   while (1)
   {
-    if (newRPMZone != 0)
+    pthread_mutex_lock(&eventQueueLock);
+
+    while (event_queue_count == 0)
     {
-      if (newRPMZone == 1)
-      {
-        // if we are moving up to a higher RPM zone, log that event
-        struct Event newEvent;
-        sprintf(newEvent.title, "RPM Zone Update");
-        sprintf(newEvent.description, "RPM zone increased to %d", rpm_zone);
-        // set timestamp for the event here
-        newEvent.timestamp = time_elapsed_trip;
-        push_event(&newEvent);
-      }
-      else if (newRPMZone == 2)
-      {
-        // if we are moving down to a lower RPM zone, log that event
-        struct Event newEvent;
-        sprintf(newEvent.title, "RPM Zone Update");
-        sprintf(newEvent.description, "RPM zone decreased to %d", rpm_zone);
-        // set timestamp for the event here
-        newEvent.timestamp = time_elapsed_trip;
-        push_event(&newEvent);
-      }
-      newRPMZone = 0; // reset the variable after handling the event
+      pthread_cond_wait(&eventQueueConditional, &eventQueueLock);
     }
 
-    if (hybridAssistChange != 0)
+    struct Event event_to_log = event_queue[0];
+    for (int i = 1; i < event_queue_count; i++)
     {
-      struct Event newEvent;
-      sprintf(newEvent.title, "Hybrid Mode Update");
-      sprintf(newEvent.description, "Hybrid mode changed to %d", hybrid_mode);
-      newEvent.timestamp = time_elapsed_trip;
-      push_event(&newEvent);
-      hybridAssistChange = 0; // reset the variable after handling the event
+      event_queue[i - 1] = event_queue[i];
+    }
+    event_queue_count--;
+
+    if (event_count < MAX_EVENTS)
+    {
+      event_log[event_count] = event_to_log;
+      event_count++;
+    }
+    else
+    {
+      memmove(&event_log[0], &event_log[1],
+              sizeof(struct Event) * (MAX_EVENTS - 1));
+      event_log[MAX_EVENTS - 1] = event_to_log;
     }
 
-    if (fuel < 0.7)
-    {
-      // this will only log the event if the fuel is less than the threshold and
-      // the last fuel amount logged is at least 0.1 gallons different
-      if (last_fuel_amount_logged == -1 ||
-          last_fuel_amount_logged - fuel > 0.1)
-      {
-        struct Event newEvent;
-        sprintf(newEvent.title, "Low Fuel Warning");
-        sprintf(newEvent.description, "Fuel level low at %.2f gallons", fuel);
-        // set timestamp for the event here
-        newEvent.timestamp = time_elapsed_trip;
-        push_event(&newEvent);
-        last_fuel_amount_logged = fuel; // update the last fuel amount logged
-      }
-    }
-    else if (last_fuel_amount_logged != -1)
-    {
-      last_fuel_amount_logged =
-          -1; // reset the variable if fuel level is back above the threshold
-    }
-
-    if (battery_level < 10)
-    {
-      // this will only log the event if the battery is less than the threshold
-      // and the last battery amount logged is at least 1 percentage point
-      // different
-      if (last_battery_amount_logged == -1 ||
-          last_battery_amount_logged - battery_level > 1)
-      {
-        struct Event newEvent;
-        sprintf(newEvent.title, "Low Battery Warning");
-        sprintf(newEvent.description, "Battery level low at %f%%",
-                battery_level);
-        // set timestamp for the event here
-        newEvent.timestamp = time_elapsed_trip;
-        push_event(&newEvent);
-        last_battery_amount_logged =
-            battery_level; // update the last battery amount logged
-      }
-    }
-    else if (last_battery_amount_logged != -1)
-    {
-      last_battery_amount_logged =
-          -1; // reset the variable if battery level is back above the threshold
-    }
-
-    if (engine_temp_zone == 3)
-    {
-      struct Event newEvent;
-      sprintf(newEvent.title, "Engine Overheat Warning");
-      sprintf(newEvent.description, "Engine temperature critical at %d C",
-              engine_temp);
-      // set timestamp for the event here
-      newEvent.timestamp = time_elapsed_trip;
-      push_event(&newEvent);
-    }
-
-    if (wheelSlipDetected == 1)
-    {
-      struct Event newEvent;
-      sprintf(newEvent.title, "Wheel Slip Detected");
-      sprintf(newEvent.description, "Wheel slip detected at speed %d mph",
-              speed);
-      // set timestamp for the event here
-      newEvent.timestamp = time_elapsed_trip;
-      push_event(&newEvent);
-    }
-
-    usleep(100000);
+    pthread_cond_signal(&eventQueueNotFullConditional);
+    pthread_mutex_unlock(&eventQueueLock);
   }
 
   return NULL;
@@ -882,6 +821,7 @@ int main()
   hybrid_mode = 2; // hybrid assist
 
   event_count = 0;
+  event_queue_count = 0;
   newRPMZone = 0;
   hybridAssistChange = 0;
   wheelSlipDetected = 0;
@@ -904,6 +844,8 @@ int main()
 
   // initialize conditionals
   pthread_cond_init(&ecuConditional, NULL);
+  pthread_cond_init(&eventQueueConditional, NULL);
+  pthread_cond_init(&eventQueueNotFullConditional, NULL);
 
   // initialize any semaphores
   sem_init(&engineRunningSem, 0, 0);
