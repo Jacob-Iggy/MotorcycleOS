@@ -107,6 +107,15 @@ pthread_cond_t eventQueueConditional;
 // Define conditional variable to signal when the event queue is not full and can accept new events
 pthread_cond_t eventQueueNotFullConditional;
 
+// helper function to notify ecu thread of a change that must be looked at, can be called by any subsytem
+void notify_ecu(void)
+{
+  pthread_mutex_lock(&ecuConditionalLock);
+  ecu_update = 1;
+  pthread_cond_signal(&ecuConditional);
+  pthread_mutex_unlock(&ecuConditionalLock);
+}
+
 // THREADS NEEDED
 
 // Engine Subsystem
@@ -319,15 +328,6 @@ void *fuel_thread(void *arg)
     sleep(1);
   }
   return NULL;
-}
-
-// helper function to notify ecu thread of a change that must be looked at, can be called by any subsytem
-void notify_ecu(void)
-{
-  pthread_mutex_lock(&ecuConditionalLock);
-  ecu_update = 1;
-  pthread_cond_signal(&ecuConditional);
-  pthread_mutex_unlock(&ecuConditionalLock);
 }
 
 // ECU Subsystem
