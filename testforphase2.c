@@ -118,11 +118,11 @@ sem_t engineRunningSem;
 void *engine_thread(void *arg)
 {
 
-  int rpm_direction = 1; //1 = rpms increase, -1 = rpms decrease
+  int rpm_direction = 1; // 1 = rpms increase, -1 = rpms decrease
 
   while (1)
   {
-    //critical
+    // critical
     pthread_mutex_lock(&engineLock);
 
     if (engine_state == 0)
@@ -194,7 +194,7 @@ void *engine_thread(void *arg)
 
     pthread_mutex_unlock(&engineLock);
 
-    //notify ECU that engine state/rpm/temp may have changed
+    // notify ECU that engine state/rpm/temp may have changed
     notify_ecu();
 
     // if engine is on, signal the fuel thread that it can consume fuel
@@ -277,7 +277,7 @@ void *fuel_thread(void *arg)
 {
   while (1)
   {
-    //crit sect. wait for engine to be on
+    // crit sect. wait for engine to be on
     pthread_mutex_lock(&fuelEngineOnLock);
 
     // wait on the condition variable until signaled by the engine thread
@@ -634,8 +634,8 @@ void *hybrid_assist_thread(void *arg)
     last_battery_amount_logged = battery_level;
 
     pthread_mutex_unlock(&hybridAssistLock);
-    
-    usleep(100000);   // 0.1 sec
+
+    usleep(100000); // 0.1 sec
 
     // notify ECU that battery/hybrid state may have changed
     notify_ecu();
@@ -935,25 +935,16 @@ void init_from_args(int argc, char *argv[])
 {
   if (argc < 6)
   {
-    printf("Usage: %s <RPM> <ENGINE_STATE> <SPEED> <FUEL_LEVEL> <A/D> [BATTERY_LEVEL]\n", argv[0]);
+    printf("Usage: %s <RPM> <ENGINE_STATE> <SPEED> <FUEL_LEVEL> <A/D> <BATTERY_LEVEL>\n", argv[0]);
     exit(1);
   }
 
-  rpm         = atoi(argv[1]);
+  rpm = atoi(argv[1]);
   engine_state = atoi(argv[2]);
-  speed        = atoi(argv[3]);
-  fuel         = atof(argv[4]);           // accepts gallons directly
-  direction    = (argv[5][0] == 'A') ? 1 : -1; // A = accelerating, D = decelerating
-
-  // optional 6th argument for battery level (teams of 3)
-  if (argc >= 7)
-  {
-    battery_level = atof(argv[6]);
-  }
-  else
-  {
-    battery_level = 74; // default if not provided
-  }
+  speed = atoi(argv[3]);
+  fuel = atof(argv[4]);                     // accepts gallons directly
+  direction = (argv[5][0] == 'A') ? 1 : -1; // A = accelerating, D = decelerating
+  battery_level = atof(argv[6]);
 }
 
 // MAIN FUNCTION
@@ -998,7 +989,7 @@ int main(int argc, char *argv[])
   newRPMZone = 0;
   hybridAssistChange = 0;
   wheelSlipDetected = 0;
-  last_fuel_amount_logged = fuel;     // initialize to starting fuel so crossing logic works correctly
+  last_fuel_amount_logged = fuel; // initialize to starting fuel so crossing logic works correctly
   last_battery_amount_logged = battery_level;
   ecu_update = 1; // set to 1 so ecu begins by checking initial conditions
   engine_off_decelerate = 0;
