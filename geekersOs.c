@@ -229,12 +229,15 @@ void *engine_thread(void *arg)
     // notify ECU that engine state/rpm/temp may have changed
     notify_ecu();
 
-    // if engine is on, signal the fuel thread that it can consume fuel
+    // if engine is on, signal the fuel thread that it can consume fuel, and signal motion thread
     if (engine_state == 1)
     {
       pthread_mutex_lock(&fuelEngineOnLock);
       pthread_cond_signal(&fuelEngineOnConditional);
       pthread_mutex_unlock(&fuelEngineOnLock);
+      pthread_mutex_lock(&motionConditionalLock);
+      pthread_cond_signal(&engineOnConditional);
+      pthread_mutex_unlock(&motionConditionalLock);
     }
 
     sleep(1); // update every second
