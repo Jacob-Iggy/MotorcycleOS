@@ -140,18 +140,15 @@ void enqueue_event(const struct Event *newEvent)
   event_queue[event_queue_count] = *newEvent;
   event_queue_count++;
 
-  // then we signal that there is a new event in the queue and we unlock the mutex
+  //signal that there is a new event in the queue and we unlock the mutex
   pthread_cond_signal(&eventQueueConditional);
   pthread_mutex_unlock(&eventQueueLock);
 }
-
-// THREADS NEEDED
 
 // Engine Subsystem
 // engine subsystem - updates RPM, temps, simulates idle to high
 void *engine_thread(void *arg)
 {
-
   int rpm_direction = 1; // 1 = rpms increase, -1 = rpms decrease
 
   while (1)
@@ -175,29 +172,29 @@ void *engine_thread(void *arg)
     }
     else
     {
-      // simulates increasing rpms for phase 1
-      rpm += rpm_direction * 150;
+      //RPM tied to speed
+      int base_idle = 1100;
+      int scale = 60;
 
-      // lowers rpms back down for simulation and repeats
-      if (rpm >= 8500)
+      pthread_mutex_lock(&motionLock);
+      int current_speed = speed;
+      pthread_mutex_unlock(&motionLock);
+
+      // only update RPM if speed changed from 0 OR RPM is out of sync
+      int target_rpm = base_idle + (current_speed * scale);
+
+      if (rpm != target_rpm)
       {
-        rpm = 8500;
-        rpm_direction = -1;
-      }
-      else if (rpm <= 1200)
-      {
-        rpm = 1200;
-        rpm_direction = 1;
+          rpm = target_rpm;
       }
 
-      // if decreases or increases wrong sets to max and mins
-      // also respect max_rpm limit set by ECU (overheat / low fuel protection)
+      // respect ECU limits
       if (rpm < 1100)
-        rpm = 1100;
+          rpm = 1100;
       if (rpm > max_rpm)
-        rpm = max_rpm;
+          rpm = max_rpm;
 
-      // rpm zones connect to temps, the higher zone the faster engine increases
+      // rpm zones control temps, the higher zone the faster engine increases
       // in temp, vice versa but idle lets it cool
       if (rpm_zone == 3)
       {
@@ -337,13 +334,8 @@ void *motion_thread(void *arg)
 
     //unlock motion mutex
     pthread_mutex_unlock(&motionLock);
-    //====================
-    // END CRITICAL SECTION
-    //====================
-
     // notify ecu that speed has changed so it can handle its functionality
     notify_ecu();
-
     // signal hybrid assist thread that speed has changed
     pthread_mutex_lock(&hybridAssistConditionalLock);
     //update hybrid update variable to 1 to notify the hybrid assist thread that it needs to check 
@@ -399,13 +391,12 @@ void *fuel_thread(void *arg)
       fuel = 0;
     }
 
-    // check if low fuel threshold just crossed — enqueue an event if so
+    // check if low fuel threshold just crossed, enqueue an event if so
     if (fuel < 0.7 && last_fuel_amount_logged > 0.7)
     {
       struct Event low_fuel_event;
       strncpy(low_fuel_event.title, "LOW FUEL", sizeof(low_fuel_event.title));
-      snprintf(low_fuel_event.description, sizeof(low_fuel_event.description),
-               "Fuel dropped below threshold: %.2f gal", fuel);
+      snprintf(low_fuel_event.description, sizeof(low_fuel_event.description), "Fuel dropped below threshold: %.2f gal", fuel);
       low_fuel_event.timestamp = time_elapsed_total;
       enqueue_event(&low_fuel_event);
     }
@@ -534,6 +525,11 @@ void *ecu_thread(void *arg)
       max_speed = 80;
       max_rpm = 8000;
     }
+    else
+    {
+      max_speed = 200;
+      max_rpm = 16500;
+    }
 
     // if fuel is less than 0.7 gallons, enable the low fuel warning
     if (fuel < 0.7)
@@ -586,10 +582,6 @@ void *hybrid_assist_thread(void *arg)
     //set hybrid update back to 0 after waking up to wait for the next signal
     hybrid_update = 0;
     pthread_mutex_unlock(&hybridAssistConditionalLock);
-
-    //================
-    // CRITICAL SECTION
-    //================
 
     pthread_mutex_lock(&hybridAssistLock);
 
@@ -664,9 +656,6 @@ void *hybrid_assist_thread(void *arg)
 
     // unlock hybrid assist mutex
     pthread_mutex_unlock(&hybridAssistLock);
-    //====================
-    // END CRITICAL SECTION
-    //====================
 
     // notify ecu that hybrid assist status has changed so it can handle any necessary changes based on the new mode
     notify_ecu();
