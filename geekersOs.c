@@ -583,6 +583,8 @@ void *hybrid_assist_thread(void *arg)
     while (hybrid_update == 0) {
       pthread_cond_wait(&speedChangeConditional, &hybridAssistConditionalLock);
     }
+    //set hybrid update back to 0 after waking up to wait for the next signal
+    hybrid_update = 0;
     pthread_mutex_unlock(&hybridAssistConditionalLock);
 
     //================
