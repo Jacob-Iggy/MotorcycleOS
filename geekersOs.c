@@ -254,9 +254,7 @@ void *engine_thread(void *arg)
 // pthread_mutex_unlock(&motionConditionalLock);
 void *motion_thread(void *arg)
 {
-  // determine direction
-  // 1 = accelerate, -1 = decelerate
-  direction = 1;
+  //direction and initial speed are auto determined by command line
   while (1)
   {
     // Condition Variable
@@ -301,34 +299,31 @@ void *motion_thread(void *arg)
     else
     {
       // Normal functionality of motion thread
-      // enforce max speed set by ECU
-      if (speed >= max_speed)
+      // enforce max speed set by ECU 
+      //might need to decelerate based on ECU changes to max speed
+      if (speed > max_speed)
       {
-        direction = -1;
-      }
-      // update speed based on direction
-      speed += direction;
-      // speed bounces between 50 and 70 so reflect that here
-      // 50mph -> increase
-      // 70mph -> decrease
-      if (speed >= 70)
-      {
-        // flip direction
-        direction = -1;
-      }
-      else if (speed <= 50)
-      {
-        direction = 1;
+        //slowly decelrate
+        speed -= 2;
+        //check if speed is less than max speed
+        if (speed < max_speed)
+        {
+          //clamp speed
+          speed = max_speed;
+        }
+      } else {
+        //make sure speed isnt 0 or max speed
+        if (!(speed <= 0 || speed == max_speed))
+        {
+          //increment speed by the direction either 1 or -1
+          speed += direction;
+        }
       }
 
-      // clamp speed to ensure its never out of bounds
+      // clamp speed to ensure its never less than 0
       if (speed <= 0)
       {
         speed = 0;
-      }
-      if (speed >= max_speed)
-      {
-        speed = max_speed;
       }
 
       // calculate distance
@@ -338,7 +333,7 @@ void *motion_thread(void *arg)
       distance_trip += distance;
     }
 
-    // unlock motion mutex
+    //unlock motion mutex
     pthread_mutex_unlock(&motionLock);
     //====================
     // END CRITICAL SECTION
