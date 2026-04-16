@@ -74,6 +74,8 @@ int engine_off_decelerate;          // variable to track if the engine was just 
 int max_speed;                      // variable to limit max speed, changed by ecu if overheating
 int max_rpm;                        // variable to limit max rpm, changed by ecu if overheating
 
+int hybrid_update; //variable for hybrid assist thread to know if it needs to check conditions and update assist state
+
 // Define all base mutex locks for each major system
 pthread_mutex_t engineLock;
 pthread_mutex_t motionLock;
@@ -344,6 +346,9 @@ void *motion_thread(void *arg)
 
     // signal hybrid assist thread that speed has changed
     pthread_mutex_lock(&hybridAssistConditionalLock);
+    //update hybrid update variable to 1 to notify the hybrid assist thread that it needs to check 
+    //conditions and potentially update assist state based on the new speed
+    hybrid_update = 1;
     pthread_cond_signal(&speedChangeConditional);
     pthread_mutex_unlock(&hybridAssistConditionalLock);
 
@@ -574,7 +579,10 @@ void *hybrid_assist_thread(void *arg)
     // Condition Variable
     // Wait for speed change from motion thread before applying hybrid assist logic
     pthread_mutex_lock(&hybridAssistConditionalLock);
-    pthread_cond_wait(&speedChangeConditional, &hybridAssistConditionalLock);
+    //loop while hybrid update is 0 to avoid waiting on the conditional if the variable is already set to 1 from a previous signal
+    while (hybrid_update == 0) {
+      pthread_cond_wait(&speedChangeConditional, &hybridAssistConditionalLock);
+    }
     pthread_mutex_unlock(&hybridAssistConditionalLock);
 
     //================
@@ -992,6 +1000,7 @@ int main(int argc, char *argv[])
   engine_off_decelerate = 0;
   max_speed = 200;
   max_rpm = 16500;
+  hybrid_update = 1; // set to 1 so hybrid assist thread checks conditions on startup
 
   // initialize all mutex's
   pthread_mutex_init(&engineLock, NULL);
