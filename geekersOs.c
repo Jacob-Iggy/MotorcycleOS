@@ -87,6 +87,11 @@ pthread_mutex_t motionConditionalLock;
 //condition variable for motion thread to check if engine is on
 pthread_cond_t engineOnConditional;
 
+//mutex to protect the conditional variable for hybrid assist thread
+pthread_mutex_t hybridAssistConditionalLock;
+//condition variable for hybrid assist thread to speed has changed
+pthread_cond_t speedChangeConditional;
+
 // mutex to protect the conditional variable for ECU
 pthread_mutex_t ecuConditionalLock;
 
@@ -271,6 +276,11 @@ void *motion_thread(void *arg)
 
     //notify ecu that speed has changed so it can handle its functionality
     notify_ecu();
+
+    //signal hybrid assist thread that speed has changed
+    pthread_mutex_lock(&hybridAssistConditionalLock);
+    pthread_cond_signal(&speedChangeConditional);
+    pthread_mutex_unlock(&hybridAssistConditionalLock);
 
     sleep(1);
   }
@@ -472,60 +482,85 @@ void *hybrid_assist_thread(void *arg)
 {
   // keep track of previous mode for ECU
   int previous_mode = hybrid_mode;
+
   while (1)
   {
-    // check if speed is decreasing
-    // utilize direction variable from motion subsystem
-    if (direction == -1)
-    {
-      // REGENERATION
-      hybrid_mode = 3;
+    //Condition Variable
+    //Wait for speed change from motion thread before applying hybrid assist logic
+    pthread_mutex_lock(&hybridAssistConditionalLock);
+    pthread_cond_wait(&speedChangeConditional, &hybridAssistConditionalLock);
+    pthread_mutex_unlock(&hybridAssistConditionalLock);
+
+    //================
+    //CRITICAL SECTION
+    //================
+
+    pthread_mutex_lock(&hybridAssistLock);
+
+    //only run hybrid assist if ECU has allowed it
+    if (electric_assist_allowed == 1) {
+      //check if engine is on and decelerating, if so turn on regeneration mode
+      if (direction == -1 && engine_state == 1) {
+        //regeneration
+        hybrid_mode = 3;
+        electric_assist_state = 0;
+        charging_state = 1;
+        battery_level += 0.07;
+      } else if (direction == 1) {
+        //handle all cases for hybrid assist when accelerating
+        if (speed > 0 && speed <= 30) {
+          //Low-Speed Electric Cruising
+          //set the electric assist state to on
+          electric_assist_state = 1;
+          // set hybrid mode
+          hybrid_mode = 1;
+          // make sure charging state is off
+          charging_state = 0;
+          // vehicle uses battery assist so battery gets drained
+          battery_level -= 0.05;
+        } else if (speed > 30 && speed <= 60) {
+          // Electric Assist During Acceleration
+          electric_assist_state = 1;
+          hybrid_mode = 2;
+          charging_state = 0;
+          battery_level -= 0.07;
+        } else if (speed > 60 && speed <= 90) {
+          electric_assist_state = 1;
+          hybrid_mode = 2;
+          charging_state = 0;
+          battery_level -= 0.09;
+        }
+      }
+    } else {
+      //ECU has disable electric assist
       electric_assist_state = 0;
-      charging_state = 1;
-      battery_level += 0.07;
-    }
-    else if (direction == 1)
-    { // hanlde all cases for hybrid assist
-      if (speed > 0 && speed <= 30)
-      { // Low-Speed Electric Cruising
-        // set the electric assist state to on
-        electric_assist_state = 1;
-        // set hybrid mode
-        hybrid_mode = 1;
-        // make sure charging state is off
-        charging_state = 0;
-        // vehicle uses battery assist so battery gets drained
-        battery_level -= 0.05;
-      }
-      else if (speed > 30 &&
-               speed <= 60)
-      { // Electric Assist During Acceleration
-        electric_assist_state = 1;
-        hybrid_mode = 2;
-        charging_state = 0;
-        battery_level -= 0.07;
-      }
-      else if (speed > 60 && speed <= 90)
-      {
-        electric_assist_state = 1;
-        hybrid_mode = 2;
-        charging_state = 0;
-        battery_level -= 0.09;
-      }
+      charging_state = 0;
+      hybrid_mode = 0;
     }
 
-    // check hybrid mode for ECU
+    //clamp battery level to ensure its never out of bounds
+    if (battery_level > 100) {
+      battery_level = 100;
+    }
+    if (battery_level < 0) {
+      battery_level = 0;
+    }
+
+    //check hybrid mode for event logging
     if (hybrid_mode != previous_mode)
     {
       hybridAssistChange = 1;
       previous_mode = hybrid_mode;
     }
 
-    // make sure battery cant go below 0 and above 100
-    if (battery_level > 100)
-      battery_level = 100;
-    if (battery_level < 0)
-      battery_level = 0;
+    //unlock hybrid assist mutex
+    pthread_mutex_unlock(&hybridAssistLock);
+    //====================
+    // END CRITICAL SECTION
+    //====================
+
+    //notify ecu that hybrid assist status has changed so it can handle any necessary changes based on the new mode
+    notify_ecu();
 
     sleep(1);
   }
@@ -876,12 +911,14 @@ int main()
   pthread_mutex_init(&dashboardLock, NULL);
   pthread_mutex_init(&ecuConditionalLock, NULL);
   pthread_mutex_init(&motionConditionalLock, NULL);
+  pthread_mutex_init(&hybridAssistConditionalLock, NULL);
 
   // initialize conditionals
   pthread_cond_init(&ecuConditional, NULL);
   pthread_cond_init(&eventQueueConditional, NULL);
   pthread_cond_init(&eventQueueNotFullConditional, NULL);
   pthread_cond_init(&engineOnConditional, NULL);
+  pthread_cond_init(&speedChangeConditional, NULL);
 
   // create threads
   pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
