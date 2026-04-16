@@ -82,14 +82,14 @@ pthread_mutex_t ecuLock;
 pthread_mutex_t hybridAssistLock;
 pthread_mutex_t dashboardLock;
 
-//mutex to protect the conditional variable for motion thread
+// mutex to protect the conditional variable for motion thread
 pthread_mutex_t motionConditionalLock;
-//condition variable for motion thread to check if engine is on
+// condition variable for motion thread to check if engine is on
 pthread_cond_t engineOnConditional;
 
-//mutex to protect the conditional variable for hybrid assist thread
+// mutex to protect the conditional variable for hybrid assist thread
 pthread_mutex_t hybridAssistConditionalLock;
-//condition variable for hybrid assist thread to speed has changed
+// condition variable for hybrid assist thread to speed has changed
 pthread_cond_t speedChangeConditional;
 
 // mutex to protect the conditional variable for ECU
@@ -107,6 +107,12 @@ pthread_cond_t eventQueueConditional;
 // Define conditional variable to signal when the event queue is not full and can accept new events
 pthread_cond_t eventQueueNotFullConditional;
 
+// Condition variable for fuel thread to wait on when engine is off
+pthread_cond_t fuelEngineOnConditional;
+
+// Mutex to protect the fuel engine condition variable
+pthread_mutex_t fuelEngineOnLock;
+
 // helper function to notify ecu thread of a change that must be looked at, can be called by any subsytem
 void notify_ecu(void)
 {
@@ -114,6 +120,27 @@ void notify_ecu(void)
   ecu_update = 1;
   pthread_cond_signal(&ecuConditional);
   pthread_mutex_unlock(&ecuConditionalLock);
+}
+
+// function to enqueue a new event into the event queue, will be called by any subsystem when they want to log an event
+void enqueue_event(const struct Event *newEvent)
+{
+  // first lock the event queue mutex to ensure exclusive access to the queue
+  pthread_mutex_lock(&eventQueueLock);
+
+  // wait until there is open space in the event queue, if the queue is full we wait on the eventQueueNotFullConditional and release the lock while waiting
+  while (event_queue_count >= 5)
+  {
+    pthread_cond_wait(&eventQueueNotFullConditional, &eventQueueLock);
+  }
+
+  // once there is space we add our event to the back of the queue
+  event_queue[event_queue_count] = *newEvent;
+  event_queue_count++;
+
+  // then we signal that there is a new event in the queue and we unlock the mutex
+  pthread_cond_signal(&eventQueueConditional);
+  pthread_mutex_unlock(&eventQueueLock);
 }
 
 // THREADS NEEDED
@@ -127,6 +154,9 @@ void *engine_thread(void *arg)
 
   while (1)
   {
+    // critical
+    pthread_mutex_lock(&engineLock);
+
     if (engine_state == 0)
     {
       // if engines off rpms go down by 150 until at 0 and temps lower
@@ -159,10 +189,11 @@ void *engine_thread(void *arg)
       }
 
       // if decreases or increases wrong sets to max and mins
+      // also respect max_rpm limit set by ECU (overheat / low fuel protection)
       if (rpm < 1100)
         rpm = 1100;
-      if (rpm > 16500)
-        rpm = 16500;
+      if (rpm > max_rpm)
+        rpm = max_rpm;
 
       // rpm zones connect to temps, the higher zone the faster engine increases
       // in temp, vice versa but idle lets it cool
@@ -193,6 +224,19 @@ void *engine_thread(void *arg)
         engine_temp = 130;
     }
 
+    pthread_mutex_unlock(&engineLock);
+
+    // notify ECU that engine state/rpm/temp may have changed
+    notify_ecu();
+
+    // if engine is on, signal the fuel thread that it can consume fuel
+    if (engine_state == 1)
+    {
+      pthread_mutex_lock(&fuelEngineOnLock);
+      pthread_cond_signal(&fuelEngineOnConditional);
+      pthread_mutex_unlock(&fuelEngineOnLock);
+    }
+
     sleep(1); // update every second
   }
 
@@ -200,11 +244,11 @@ void *engine_thread(void *arg)
 }
 
 // Motion Subsystem
-//NOTES FOR WHEN WE MEET:
-//wherever we have the engine turning on we need to set these for sync with motion
-//pthread_mutex_lock(&motionConditionalLock);
-//pthread_cond_signal(&engineOnConditional);
-//pthread_mutex_unlock(&motionConditionalLock);
+// NOTES FOR WHEN WE MEET:
+// wherever we have the engine turning on we need to set these for sync with motion
+// pthread_mutex_lock(&motionConditionalLock);
+// pthread_cond_signal(&engineOnConditional);
+// pthread_mutex_unlock(&motionConditionalLock);
 void *motion_thread(void *arg)
 {
   // determine direction
@@ -212,81 +256,95 @@ void *motion_thread(void *arg)
   direction = 1;
   while (1)
   {
-    //Condition Variable
-    //Wait until the engine is actually ON
+    // Condition Variable
+    // Wait until the engine is actually ON
     pthread_mutex_lock(&motionConditionalLock);
-    while (engine_state == 0 && engine_off_decelerate == 0) {
+    while (engine_state == 0 && engine_off_decelerate == 0)
+    {
       pthread_cond_wait(&engineOnConditional, &motionConditionalLock);
     }
     pthread_mutex_unlock(&motionConditionalLock);
 
     //================
-    //CRITICAL SECTION
+    // CRITICAL SECTION
     //================
 
     // lock the motion mutex
     pthread_mutex_lock(&motionLock);
 
-    //check if the engine is in deceleration mode
-    if (engine_off_decelerate == 1) {
-      //gradually reduce speed since engine is off
-      if (speed > 0) {
+    // check if the engine is in deceleration mode
+    if (engine_off_decelerate == 1)
+    {
+      // gradually reduce speed since engine is off
+      if (speed > 0)
+      {
         speed -= 2;
-        if (speed < 0) {
+        if (speed < 0)
+        {
           speed = 0;
         }
 
-        //Distance still tracks so update
+        // Distance still tracks so update
         float distance = (float)speed / 3600;
         distance_total += distance;
         distance_trip += distance;
-      } else {
-        //Speed is 0 so tell ECU that deceleration is complete
+      }
+      else
+      {
+        // Speed is 0 so tell ECU that deceleration is complete
         engine_off_decelerate = 0;
       }
-    } else {
-      //Normal functionality of motion thread
-      //enforce max speed set by ECU
-      if (speed >= max_speed) {
+    }
+    else
+    {
+      // Normal functionality of motion thread
+      // enforce max speed set by ECU
+      if (speed >= max_speed)
+      {
         direction = -1;
       }
-      //update speed based on direction
+      // update speed based on direction
       speed += direction;
-      //speed bounces between 50 and 70 so reflect that here
-      //50mph -> increase
-      //70mph -> decrease
-      if (speed >= 70) {
-        //flip direction
+      // speed bounces between 50 and 70 so reflect that here
+      // 50mph -> increase
+      // 70mph -> decrease
+      if (speed >= 70)
+      {
+        // flip direction
         direction = -1;
-      } else if (speed <= 50) {
+      }
+      else if (speed <= 50)
+      {
         direction = 1;
       }
 
-      //clamp speed to ensure its never out of bounds
-      if (speed <= 0) {
+      // clamp speed to ensure its never out of bounds
+      if (speed <= 0)
+      {
         speed = 0;
       }
-      if (speed >= max_speed) {
+      if (speed >= max_speed)
+      {
         speed = max_speed;
       }
 
-      //calculate distance
+      // calculate distance
       float distance = (float)speed / 3600;
       // update distance counters
       distance_total += distance;
       distance_trip += distance;
     }
 
-    //unlock motion mutex
+    // unlock motion mutex
     pthread_mutex_unlock(&motionLock);
     //====================
     // END CRITICAL SECTION
     //====================
 
-    //notify ecu that speed has changed so it can handle its functionality
+    // notify ecu that speed has changed so it can handle its functionality
     notify_ecu();
 
-    //signal hybrid assist thread that speed has changed
+    // signal hybrid assist thread that speed has changed
     pthread_mutex_lock(&hybridAssistConditionalLock);
     pthread_cond_signal(&speedChangeConditional);
     pthread_mutex_unlock(&hybridAssistConditionalLock);
@@ -301,6 +359,19 @@ void *fuel_thread(void *arg)
 {
   while (1)
   {
+    // crit sect. wait for engine to be on
+    pthread_mutex_lock(&fuelEngineOnLock);
+
+    // wait on the condition variable until signaled by the engine thread
+    while (engine_state == 0)
+    {
+      pthread_cond_wait(&fuelEngineOnConditional, &fuelEngineOnLock);
+    }
+
+    pthread_mutex_unlock(&fuelEngineOnLock);
+
+    pthread_mutex_lock(&fuelLock);
+
     if (rpm_zone == 0)
     { // Idle = [1100═1300)
       fuel -= 0.002;
@@ -324,7 +395,24 @@ void *fuel_thread(void *arg)
       engine_state = 0;
       fuel = 0;
     }
-    // sleep for 1 second then decrement speed
+
+    // check if low fuel threshold just crossed — enqueue an event if so
+    if (fuel < 0.7 && last_fuel_amount_logged > 0.7)
+    {
+      struct Event low_fuel_event;
+      strncpy(low_fuel_event.title, "LOW FUEL", sizeof(low_fuel_event.title));
+      snprintf(low_fuel_event.description, sizeof(low_fuel_event.description),
+               "Fuel dropped below threshold: %.2f gal", fuel);
+      low_fuel_event.timestamp = time_elapsed_total;
+      enqueue_event(&low_fuel_event);
+    }
+    last_fuel_amount_logged = fuel;
+
+    pthread_mutex_unlock(&fuelLock);
+
+    // notify ECU that fuel has changed
+    notify_ecu();
+
     sleep(1);
   }
   return NULL;
@@ -485,32 +573,37 @@ void *hybrid_assist_thread(void *arg)
 
   while (1)
   {
-    //Condition Variable
-    //Wait for speed change from motion thread before applying hybrid assist logic
+    // Condition Variable
+    // Wait for speed change from motion thread before applying hybrid assist logic
     pthread_mutex_lock(&hybridAssistConditionalLock);
     pthread_cond_wait(&speedChangeConditional, &hybridAssistConditionalLock);
     pthread_mutex_unlock(&hybridAssistConditionalLock);
 
     //================
-    //CRITICAL SECTION
+    // CRITICAL SECTION
     //================
 
     pthread_mutex_lock(&hybridAssistLock);
 
-    //only run hybrid assist if ECU has allowed it
-    if (electric_assist_allowed == 1) {
-      //check if engine is on and decelerating, if so turn on regeneration mode
-      if (direction == -1 && engine_state == 1) {
-        //regeneration
+    // only run hybrid assist if ECU has allowed it
+    if (electric_assist_allowed == 1)
+    {
+      // check if engine is on and decelerating, if so turn on regeneration mode
+      if (direction == -1 && engine_state == 1)
+      {
+        // regeneration
         hybrid_mode = 3;
         electric_assist_state = 0;
         charging_state = 1;
         battery_level += 0.07;
-      } else if (direction == 1) {
-        //handle all cases for hybrid assist when accelerating
-        if (speed > 0 && speed <= 30) {
-          //Low-Speed Electric Cruising
-          //set the electric assist state to on
+      }
+      else if (direction == 1)
+      {
+        // handle all cases for hybrid assist when accelerating
+        if (speed > 0 && speed <= 30)
+        {
+          // Low-Speed Electric Cruising
+          // set the electric assist state to on
           electric_assist_state = 1;
           // set hybrid mode
           hybrid_mode = 1;
@@ -518,73 +611,61 @@ void *hybrid_assist_thread(void *arg)
           charging_state = 0;
           // vehicle uses battery assist so battery gets drained
           battery_level -= 0.05;
-        } else if (speed > 30 && speed <= 60) {
+        }
+        else if (speed > 30 && speed <= 60)
+        {
           // Electric Assist During Acceleration
           electric_assist_state = 1;
           hybrid_mode = 2;
           charging_state = 0;
           battery_level -= 0.07;
-        } else if (speed > 60 && speed <= 90) {
+        }
+        else if (speed > 60 && speed <= 90)
+        {
           electric_assist_state = 1;
           hybrid_mode = 2;
           charging_state = 0;
           battery_level -= 0.09;
         }
       }
-    } else {
-      //ECU has disable electric assist
+    }
+    else
+    {
+      // ECU has disable electric assist
       electric_assist_state = 0;
       charging_state = 0;
       hybrid_mode = 0;
     }
 
-    //clamp battery level to ensure its never out of bounds
-    if (battery_level > 100) {
+    // clamp battery level to ensure its never out of bounds
+    if (battery_level > 100)
+    {
       battery_level = 100;
     }
-    if (battery_level < 0) {
+    if (battery_level < 0)
+    {
       battery_level = 0;
     }
 
-    //check hybrid mode for event logging
+    // check hybrid mode for event logging
     if (hybrid_mode != previous_mode)
     {
       hybridAssistChange = 1;
       previous_mode = hybrid_mode;
     }
 
-    //unlock hybrid assist mutex
+    // unlock hybrid assist mutex
     pthread_mutex_unlock(&hybridAssistLock);
     //====================
     // END CRITICAL SECTION
     //====================
 
-    //notify ecu that hybrid assist status has changed so it can handle any necessary changes based on the new mode
+    // notify ecu that hybrid assist status has changed so it can handle any necessary changes based on the new mode
     notify_ecu();
 
     sleep(1);
   }
   return NULL;
-}
-
-void enqueue_event(const struct Event *newEvent)
-{
-  // first lock the event queue mutex to ensure exclusive access to the queue
-  pthread_mutex_lock(&eventQueueLock);
-
-  // wait until there is open space in the event queue, if the queue is full we wait on the eventQueueNotFullConditional and release the lock while waiting
-  while (event_queue_count >= 5)
-  {
-    pthread_cond_wait(&eventQueueNotFullConditional, &eventQueueLock);
-  }
-
-  // once there is space we add our event to the back of the queue
-  event_queue[event_queue_count] = *newEvent;
-  event_queue_count++;
-
-  // then we signal that there is a new event in the queue and we unlock the mutex
-  pthread_cond_signal(&eventQueueConditional);
-  pthread_mutex_unlock(&eventQueueLock);
 }
 
 // Event Logging Subsystem
@@ -852,19 +933,33 @@ void *time_thread(void *arg)
   return NULL;
 }
 
+void init_from_args(int argc, char *argv[])
+{
+  if (argc < 6)
+  {
+    printf("Usage: %s <RPM> <ENGINE_STATE> <SPEED> <FUEL_LEVEL> <A/D> <BATTERY_LEVEL>\n", argv[0]);
+    exit(1);
+  }
+
+  rpm = atoi(argv[1]);
+  engine_state = atoi(argv[2]);
+  speed = atoi(argv[3]);
+  fuel = atof(argv[4]);                     // accepts gallons directly
+  direction = (argv[5][0] == 'A') ? 1 : -1; // A = accelerating, D = decelerating
+  battery_level = atof(argv[6]);
+}
+
 // MAIN FUNCTION
-int main()
+int main(int argc, char *argv[])
 {
   srand(time(NULL));
 
-  engine_state = 1;
-  rpm = 1200; // start at idle RPM
+  init_from_args(argc, argv);
+
   rpm_zone = 0;
   engine_temp = 45; // cold start
   engine_temp_zone = 0;
 
-  speed = 50;
-  fuel = 3.5f;
   low_fuel_warning = 0;
 
   // Total distance - random start val
@@ -883,7 +978,6 @@ int main()
 
   signal_state = 0;
   headlight_state = 1;
-  battery_level = 74;
   electric_assist_state = 1;
   electric_assist_allowed = 0;
   charging_state = 0;
@@ -912,6 +1006,7 @@ int main()
   pthread_mutex_init(&ecuConditionalLock, NULL);
   pthread_mutex_init(&motionConditionalLock, NULL);
   pthread_mutex_init(&hybridAssistConditionalLock, NULL);
+  pthread_mutex_init(&fuelEngineOnLock, NULL);
 
   // initialize conditionals
   pthread_cond_init(&ecuConditional, NULL);
@@ -919,6 +1014,7 @@ int main()
   pthread_cond_init(&eventQueueNotFullConditional, NULL);
   pthread_cond_init(&engineOnConditional, NULL);
   pthread_cond_init(&speedChangeConditional, NULL);
+  pthread_cond_init(&fuelEngineOnConditional, NULL);
 
   // create threads
   pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
