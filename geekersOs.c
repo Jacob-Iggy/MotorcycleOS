@@ -82,6 +82,11 @@ pthread_mutex_t ecuLock;
 pthread_mutex_t hybridAssistLock;
 pthread_mutex_t dashboardLock;
 
+//mutex to protect the conditional variable for motion thread
+pthread_mutex_t motionConditionalLock;
+//condition variable for motion thread to check if engine is on
+pthread_cond_t engineOnConditional;
+
 // mutex to protect the conditional variable for ECU
 pthread_mutex_t ecuConditionalLock;
 
@@ -96,9 +101,6 @@ pthread_cond_t eventQueueConditional;
 
 // Define conditional variable to signal when the event queue is not full and can accept new events
 pthread_cond_t eventQueueNotFullConditional;
-
-// Define semaphores needed for sync
-sem_t engineRunningSem;
 
 // THREADS NEEDED
 
@@ -184,6 +186,11 @@ void *engine_thread(void *arg)
 }
 
 // Motion Subsystem
+//NOTES FOR WHEN WE MEET:
+//wherever we have the engine turning on we need to set these for sync with motion
+//pthread_mutex_lock(&motionConditionalLock);
+//pthread_cond_signal(&engineOnConditional);
+//pthread_mutex_unlock(&motionConditionalLock);
 void *motion_thread(void *arg)
 {
   // determine direction
@@ -191,52 +198,79 @@ void *motion_thread(void *arg)
   direction = 1;
   while (1)
   {
-    // Wait for the engine to be turned on
-    sem_wait(&engineRunningSem);
+    //Condition Variable
+    //Wait until the engine is actually ON
+    pthread_mutex_lock(&motionConditionalLock);
+    while (engine_state == 0 && engine_off_decelerate == 0) {
+      pthread_cond_wait(&engineOnConditional, &motionConditionalLock);
+    }
+    pthread_mutex_unlock(&motionConditionalLock);
 
     //================
-    // CRITICAL SECTION
+    //CRITICAL SECTION
     //================
 
     // lock the motion mutex
     pthread_mutex_lock(&motionLock);
-    // update speed based on direction
-    speed += direction;
-    // check what the current speed is
-    // 50mph -> increase
-    // 70mph -> decrease
-    if (speed == 70)
-    {
-      // flip direction
-      direction = -1;
-    }
-    else if (speed == 50)
-    {
-      // flip direction
-      direction = 1;
-    }
-    // calculate distance
-    float distance = (float)speed / 3600;
-    // update distance counters
-    distance_total += distance;
-    distance_trip += distance;
 
-    // ensure the speed never gets out of defined bounds 0-200
-    // this isnt possible due to the instructions for this thread but the range
-    // was mentioned in assignment
-    if (speed <= 0)
-    {
-      speed = 0;
-    }
-    if (speed >= 200)
-    {
-      speed = 200;
+    //check if the engine is in deceleration mode
+    if (engine_off_decelerate == 1) {
+      //gradually reduce speed since engine is off
+      if (speed > 0) {
+        speed -= 2;
+        if (speed < 0) {
+          speed = 0;
+        }
+
+        //Distance still tracks so update
+        float distance = (float)speed / 3600;
+        distance_total += distance;
+        distance_trip += distance;
+      } else {
+        //Speed is 0 so tell ECU that deceleration is complete
+        engine_off_decelerate = 0;
+      }
+    } else {
+      //Normal functionality of motion thread
+      //enforce max speed set by ECU
+      if (speed >= max_speed) {
+        direction = -1;
+      }
+      //update speed based on direction
+      speed += direction;
+      //speed bounces between 50 and 70 so reflect that here
+      //50mph -> increase
+      //70mph -> decrease
+      if (speed >= 70) {
+        //flip direction
+        direction = -1;
+      } else if (speed <= 50) {
+        direction = 1;
+      }
+
+      //clamp speed to ensure its never out of bounds
+      if (speed <= 0) {
+        speed = 0;
+      }
+      if (speed >= max_speed) {
+        speed = max_speed;
+      }
+
+      //calculate distance
+      float distance = (float)speed / 3600;
+      // update distance counters
+      distance_total += distance;
+      distance_trip += distance;
     }
 
+    //unlock motion mutex
     pthread_mutex_unlock(&motionLock);
     //====================
     // END CRITICAL SECTION
     //====================
+
+    //notify ecu that speed has changed so it can handle its functionality
+    notify_ecu();
 
     sleep(1);
   }
@@ -841,18 +875,13 @@ int main()
   pthread_mutex_init(&eventQueueLock, NULL);
   pthread_mutex_init(&dashboardLock, NULL);
   pthread_mutex_init(&ecuConditionalLock, NULL);
+  pthread_mutex_init(&motionConditionalLock, NULL);
 
   // initialize conditionals
   pthread_cond_init(&ecuConditional, NULL);
   pthread_cond_init(&eventQueueConditional, NULL);
   pthread_cond_init(&eventQueueNotFullConditional, NULL);
-
-  // initialize any semaphores
-  sem_init(&engineRunningSem, 0, 0);
-
-  // update any semaphores according to how globals are defined at the start of main
-  // THIS MIGHT GET UPDATED WHEN I SETUP THE COMMAND LINE THINGS (SECTION 8 OF PDF)
-  sem_post(&engineRunningSem); // engine state set to 1 at start so post to sem
+  pthread_cond_init(&engineOnConditional, NULL);
 
   // create threads
   pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
