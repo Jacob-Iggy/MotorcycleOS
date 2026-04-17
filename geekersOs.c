@@ -673,6 +673,7 @@ void *hybrid_assist_thread(void *arg)
     hybrid_update = 0;
     pthread_mutex_unlock(&hybridAssistConditionalLock);
 
+    pthread_mutex_lock(&motionLock); // for checking speed
     pthread_mutex_lock(&hybridAssistLock);
 
     // only run hybrid assist if ECU has allowed it
@@ -726,6 +727,8 @@ void *hybrid_assist_thread(void *arg)
       charging_state = 0;
       hybrid_mode = 0;
     }
+
+    pthread_mutex_unlock(&motionLock); // unlock motion since we no longer need to check speed
 
     // clamp battery level to ensure its never out of bounds
     if (battery_level > 100)
