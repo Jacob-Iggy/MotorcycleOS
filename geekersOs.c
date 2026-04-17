@@ -31,89 +31,71 @@ struct Event
   struct Time timestamp;
 };
 
-int engine_state;               // 0 = off, 1 = on
-int rpm;                        // 0 if engine off, 1100-16500 if on
-int rpm_zone;                   // 0 = idle, 1 = normal, 2 = high, 3 = redline
-int engine_temp;                // temp in degrees Celsius
-int engine_temp_zone;           // 0 = cold, 1 = normal, 2 = hot, 3 = overheat
-struct Time time_elapsed_total; // in seconds
-struct Time time_elapsed_trip;  // in seconds
-int speed;                      // in mph, 0 if engine off, 0-200 if on
-float fuel;                     // in gallons, 0-4.7
-int low_fuel_warning;           // 0 = no warning, 1 = low fuel warning
-float distance_total;           // in miles
-float distance_trip;            // in miles
+// ENGINE SUBSYSTEM VARIABLES
+pthread_mutex_t engineLock; // mutex lock for engine subsystem
+int engine_state;           // 0 = off, 1 = on
+int rpm;                    // 0 if engine off, 1100-16500 if on
+int rpm_zone;               // 0 = idle, 1 = normal, 2 = high, 3 = redline
+int engine_temp;            // temp in degrees Celsius
+int engine_temp_zone;       // 0 = cold, 1 = normal, 2 = hot, 3 = overheat
+int max_rpm;                // variable to limit max rpm, changed by ecu if overheating
+
+// MOTION SUBSYSTEM VARIABLES
+pthread_mutex_t motionLock;            // mutex lock for motion subsystem
+pthread_mutex_t motionConditionalLock; // mutex to protect the conditional variable for motion thread
+pthread_cond_t engineOnConditional;    // condition variable for motion thread to check if engine is on
+int speed;                             // in mph, 0 if engine off, 0-200 if on
+float distance_total;                  // in miles
+float distance_trip;                   // in miles
+int direction;                         // direction global variable for motion and hybrid assist
+int engine_off_decelerate;             // variable to track if the engine was just turned off and speed isn't 0, we must decelarate
+int max_speed;                         // variable to limit max speed, changed by ecu if overheating
+
+// FUEL SUBSYSTEM VARIABLES
+pthread_mutex_t fuelLock;               // mutex lock for fuel subsystem
+pthread_mutex_t fuelEngineOnLock;       // Mutex to protect the fuel engine condition variable
+pthread_cond_t fuelEngineOnConditional; // Condition variable for fuel thread to wait on when engine is off
+float fuel;                             // in gallons, 0-4.7
+int low_fuel_warning;                   // 0 = no warning, 1 = low fuel warning
+float last_fuel_amount_logged;          // variable to track what the last low fuel warning was logged at
+
+// HYBRID SUBSYSTEM VARIABLES
+pthread_mutex_t hybridAssistLock;            // mutex lock for hybrid assist subsystem
+pthread_mutex_t hybridAssistConditionalLock; // mutex to protect the conditional variable for hybrid assist thread
+pthread_cond_t speedChangeConditional;       // condition variable for hybrid assist thread to speed has changed
+float battery_level;                         // in percentage, 0-100
+int electric_assist_state;                   // 0 = off, 1 = on
+int electric_assist_allowed;                 // 0 = not allowed, 1 = allowed based on conditions
+int charging_state;                          // 0 = off, 1 = on
+int hybrid_mode;                             // 0 = none, 1 = cruising, 2 = assist, 3 = regeneration
+int hybrid_update;                           // variable for hybrid assist thread to know if it needs to check conditions and update assist state
+
+// DASHBOARD SUBSYSTEM VARIABLES
+pthread_mutex_t dashboardLock;  // mutex lock for dashboard subsystem
 int signal_state;               // 0 = off, 1 = left, 2 = right, 3 = hazards
 int headlight_state;            // 0 = off, 1 = on
-float battery_level;            // in percentage, 0-100
-int electric_assist_state;      // 0 = off, 1 = on
-int electric_assist_allowed;    // 0 = not allowed, 1 = allowed based on conditions
-int charging_state;             // 0 = off, 1 = on
-int hybrid_mode;                // 0 = none, 1 = cruising, 2 = assist, 3 = regeneration
+struct Time time_elapsed_total; // in seconds
+struct Time time_elapsed_trip;  // in seconds
 
-// direction global variable for motion and hybrid assist
-int direction;
+// EVENT SUBSYSTEM VARIABLES
+pthread_mutex_t eventQueueLock;              // mutex to protect event queue
+pthread_cond_t eventQueueConditional;        // Define conditional variable to signal event thread when there is a new event in the queue
+pthread_cond_t eventQueueNotFullConditional; // Define conditional variable to signal when the event queue is not full and can accept new events
+struct Event event_log[MAX_EVENTS];          // array to store event logs
+int event_count;                             // number of events in the log
+struct Event event_queue[5];                 // queue to store events that need to be processed by the event thread, 5 events max in the queue
+int event_queue_count;                       // number of events currently in the queue
 
-// Event System Variables
-struct Event event_log[MAX_EVENTS]; // array to store event logs
-int event_count;                    // number of events in the log
-struct Event event_queue[5];        // queue to store events that need to be processed by the event thread, 5 events max in the queue
-int event_queue_count;              // number of events currently in the queue
-int newRPMZone;                     // variable to store if an rpm zone update event has been
-                                    // triggered, 0 = no update, 1 = increment, 2 = decrement
-int hybridAssistChange;             // variable to store if hybrid assist mode changes, 0 =
-                                    // no change, 1 = turned on, 2 = turned off
-int wheelSlipDetected;              // variable to store if wheel slip is detected, 0 = no
-                                    // slip, 1 = slip detected
-float last_fuel_amount_logged;      // variable to track what the last low fuel
-                                    // warning was logged at
-float last_battery_amount_logged;   // variable to track what the last low battery
-                                    // warning was logged at
+// ECU SUBSYSTEM VARIABLES
+pthread_mutex_t ecuLock;            // mutex lock for ECU subsystem
+pthread_mutex_t ecuConditionalLock; // mutex to protect the conditional variable for ECU
+pthread_cond_t ecuConditional;      // Define conditional variable for ECU to wait on for if there is a change to check
 int ecu_update;                     // variable to track if something has changed like fuel or speed so the ecu must go through and check the system status
-int engine_off_decelerate;          // variable to track if the engine was just turned off and speed isn't 0, we must decelarate
-int max_speed;                      // variable to limit max speed, changed by ecu if overheating
-int max_rpm;                        // variable to limit max rpm, changed by ecu if overheating
 
-int hybrid_update; //variable for hybrid assist thread to know if it needs to check conditions and update assist state
-
-// Define all base mutex locks for each major system
-pthread_mutex_t engineLock;
-pthread_mutex_t motionLock;
-pthread_mutex_t fuelLock;
-pthread_mutex_t ecuLock;
-pthread_mutex_t hybridAssistLock;
-pthread_mutex_t dashboardLock;
-
-// mutex to protect the conditional variable for motion thread
-pthread_mutex_t motionConditionalLock;
-// condition variable for motion thread to check if engine is on
-pthread_cond_t engineOnConditional;
-
-// mutex to protect the conditional variable for hybrid assist thread
-pthread_mutex_t hybridAssistConditionalLock;
-// condition variable for hybrid assist thread to speed has changed
-pthread_cond_t speedChangeConditional;
-
-// mutex to protect the conditional variable for ECU
-pthread_mutex_t ecuConditionalLock;
-
-// mutex to protect event queue
-pthread_mutex_t eventQueueLock;
-
-// Define conditional variable for ECU to wait on for if there is a change to check
-pthread_cond_t ecuConditional;
-
-// Define conditional variable to signal event thread when there is a new event in the queue
-pthread_cond_t eventQueueConditional;
-
-// Define conditional variable to signal when the event queue is not full and can accept new events
-pthread_cond_t eventQueueNotFullConditional;
-
-// Condition variable for fuel thread to wait on when engine is off
-pthread_cond_t fuelEngineOnConditional;
-
-// Mutex to protect the fuel engine condition variable
-pthread_mutex_t fuelEngineOnLock;
+// CHANGE VARIABLES FOR EVENT LOGGING
+int limiting_speed_rpm_event; // variable to track if we just limited speed and rpm so we can log an event
+int wheelSlipDetected;        // variable to store if wheel slip is detected, 0 = no
+                              // slip, 1 = slip detected
 
 // helper function to notify ecu thread of a change that must be looked at, can be called by any subsytem
 void notify_ecu(void)
@@ -140,7 +122,7 @@ void enqueue_event(const struct Event *newEvent)
   event_queue[event_queue_count] = *newEvent;
   event_queue_count++;
 
-  //signal that there is a new event in the queue and we unlock the mutex
+  // signal that there is a new event in the queue and we unlock the mutex
   pthread_cond_signal(&eventQueueConditional);
   pthread_mutex_unlock(&eventQueueLock);
 }
@@ -172,7 +154,7 @@ void *engine_thread(void *arg)
     }
     else
     {
-      //RPM tied to speed
+      // RPM tied to speed
       int base_idle = 1100;
       int scale = 60;
 
@@ -183,16 +165,25 @@ void *engine_thread(void *arg)
       // only update RPM if speed changed from 0 OR RPM is out of sync
       int target_rpm = base_idle + (current_speed * scale);
 
-      if (rpm != target_rpm)
-      {
-          rpm = target_rpm;
-      }
-
-      // respect ECU limits
       if (rpm < 1100)
-          rpm = 1100;
-      if (rpm > max_rpm)
-          rpm = max_rpm;
+      {
+        rpm = 1200; // if rpm is below idle, set to idle rpm
+      }
+      else if (rpm > max_rpm)
+      {
+        rpm -= 150; // if rpm is above max rpm, decelerate it by 150 until it is at or below the max rpm set by the ECU
+      }
+      else
+      {
+        if (rpm > target_rpm)
+        {
+          rpm -= 150; // if rpm is above target rpm based on speed, decelerate it by 150 until it is at or below the target rpm
+        }
+        else
+        {
+          rpm += 150; // if rpm is below target rpm based on speed, accelerate it by 150 until it is at or above the target rpm
+        }
+      }
 
       // rpm zones control temps, the higher zone the faster engine increases
       // in temp, vice versa but idle lets it cool
@@ -210,12 +201,20 @@ void *engine_thread(void *arg)
         {
           engine_temp += 1;
         }
+        else if (engine_temp > 92)
+        {
+          engine_temp -= 1;
+        }
       }
       else if (rpm_zone == 0)
       {
         if (engine_temp > 75)
         {
           engine_temp -= 1;
+        }
+        else if (engine_temp < 75)
+        {
+          engine_temp += 1;
         }
       }
       // max of 130 degrees
@@ -246,14 +245,9 @@ void *engine_thread(void *arg)
 }
 
 // Motion Subsystem
-// NOTES FOR WHEN WE MEET:
-// wherever we have the engine turning on we need to set these for sync with motion
-// pthread_mutex_lock(&motionConditionalLock);
-// pthread_cond_signal(&engineOnConditional);
-// pthread_mutex_unlock(&motionConditionalLock);
 void *motion_thread(void *arg)
 {
-  //direction and initial speed are auto determined by command line
+  // direction and initial speed are auto determined by command line
   while (1)
   {
     // Condition Variable
@@ -298,23 +292,25 @@ void *motion_thread(void *arg)
     else
     {
       // Normal functionality of motion thread
-      // enforce max speed set by ECU 
-      //might need to decelerate based on ECU changes to max speed
+      // enforce max speed set by ECU
+      // might need to decelerate based on ECU changes to max speed
       if (speed > max_speed)
       {
-        //slowly decelrate
+        // slowly decelrate
         speed -= 2;
-        //check if speed is less than max speed
+        // check if speed is less than max speed
         if (speed < max_speed)
         {
-          //clamp speed
+          // clamp speed
           speed = max_speed;
         }
-      } else {
-        //make sure speed isnt 0 or max speed
+      }
+      else
+      {
+        // make sure speed isnt 0 or max speed
         if (!(speed <= 0 || speed == max_speed))
         {
-          //increment speed by the direction either 1 or -1
+          // increment speed by the direction either 1 or -1
           speed += direction;
         }
       }
@@ -332,14 +328,14 @@ void *motion_thread(void *arg)
       distance_trip += distance;
     }
 
-    //unlock motion mutex
+    // unlock motion mutex
     pthread_mutex_unlock(&motionLock);
     // notify ecu that speed has changed so it can handle its functionality
     notify_ecu();
     // signal hybrid assist thread that speed has changed
     pthread_mutex_lock(&hybridAssistConditionalLock);
-    //update hybrid update variable to 1 to notify the hybrid assist thread that it needs to check 
-    //conditions and potentially update assist state based on the new speed
+    // update hybrid update variable to 1 to notify the hybrid assist thread that it needs to check
+    // conditions and potentially update assist state based on the new speed
     hybrid_update = 1;
     pthread_cond_signal(&speedChangeConditional);
     pthread_mutex_unlock(&hybridAssistConditionalLock);
@@ -366,6 +362,7 @@ void *fuel_thread(void *arg)
     pthread_mutex_unlock(&fuelEngineOnLock);
 
     pthread_mutex_lock(&fuelLock);
+    pthread_mutex_lock(&engineLock); // also lock engine since we need to check rpm zones
 
     if (rpm_zone == 0)
     { // Idle = [1100═1300)
@@ -391,16 +388,22 @@ void *fuel_thread(void *arg)
       fuel = 0;
     }
 
+    pthread_mutex_unlock(&engineLock); // unlock engine since we no longer need to check engine state
+
     // check if low fuel threshold just crossed, enqueue an event if so
-    if (fuel < 0.7 && last_fuel_amount_logged > 0.7)
+    if (fuel < 0.7 && (last_fuel_amount_logged > 0.7 || abs(fuel - last_fuel_amount_logged) > 0.1))
     {
       struct Event low_fuel_event;
       strncpy(low_fuel_event.title, "LOW FUEL", sizeof(low_fuel_event.title));
       snprintf(low_fuel_event.description, sizeof(low_fuel_event.description), "Fuel dropped below threshold: %.2f gal", fuel);
       low_fuel_event.timestamp = time_elapsed_total;
       enqueue_event(&low_fuel_event);
+      last_fuel_amount_logged = fuel;
     }
-    last_fuel_amount_logged = fuel;
+    else if (fuel >= 0.7)
+    {
+      last_fuel_amount_logged = fuel; // update the last fuel amount logged when fuel goes back above the threshold so we can log again if it drops below again
+    }
 
     pthread_mutex_unlock(&fuelLock);
 
@@ -431,7 +434,9 @@ void *ecu_thread(void *arg)
     ecu_update = 0;                            // reset the variable after being signaled and waking up
     pthread_mutex_unlock(&ecuConditionalLock); // unlock the conditional lock after fully waking up
 
-    // now below are all the things ECU will check through
+    // lock engine and motion to check rpm, ropm zones, speeds, etc.
+    pthread_mutex_lock(&engineLock);
+    pthread_mutex_lock(&motionLock);
 
     // if engine is off make sure rpm and speed is at 0
     if (engine_state == 0)
@@ -477,27 +482,28 @@ void *ecu_thread(void *arg)
     // only log a change if the zone actually changed
     if (computed_zone != old_zone)
     {
-      if (old_zone == -1 && computed_zone != -1)
+      if (computed_zone > old_zone)
       {
-        newRPMZone = 1; // engine/off -> active zone
+        struct Event rpm_zone_event;
+        strncpy(rpm_zone_event.title, "RPM ZONE INCREASE", sizeof(rpm_zone_event.title));
+        snprintf(rpm_zone_event.description, sizeof(rpm_zone_event.description), "RPM zone increased from %d to %d", old_zone, computed_zone);
+        rpm_zone_event.timestamp = time_elapsed_total;
+        enqueue_event(&rpm_zone_event);
       }
-      else if (computed_zone == -1 && old_zone != -1)
+      else
       {
-        newRPMZone = 2; // active zone -> off
-      }
-      else if (computed_zone > old_zone)
-      {
-        newRPMZone = 1; // moved up
-      }
-      else if (computed_zone < old_zone)
-      {
-        newRPMZone = 2; // moved down
+        struct Event rpm_zone_event;
+        strncpy(rpm_zone_event.title, "RPM ZONE DECREASE", sizeof(rpm_zone_event.title));
+        snprintf(rpm_zone_event.description, sizeof(rpm_zone_event.description), "RPM zone decreased from %d to %d", old_zone, computed_zone);
+        rpm_zone_event.timestamp = time_elapsed_total;
+        enqueue_event(&rpm_zone_event);
       }
       rpm_zone = computed_zone;
     }
 
     // this part updates the engine temperature zone based on the current engine
     // temperature
+    int old_temp_zone = engine_temp_zone;
     if (engine_temp < 60)
     {
       // COLD
@@ -519,17 +525,52 @@ void *ecu_thread(void *arg)
       engine_temp_zone = 3;
     }
 
+    if (old_temp_zone != engine_temp_zone)
+    {
+      if (engine_temp_zone == 3)
+      {
+        struct Event temp_zone_event;
+        strncpy(temp_zone_event.title, "ENGINE OVERHEATING", sizeof(temp_zone_event.title));
+        snprintf(temp_zone_event.description, sizeof(temp_zone_event.description), "Engine is overheating (zone %d to %d)", old_temp_zone, engine_temp_zone);
+        temp_zone_event.timestamp = time_elapsed_total;
+        enqueue_event(&temp_zone_event);
+      }
+      else if (engine_temp_zone == 2)
+      {
+        struct Event temp_zone_event;
+        strncpy(temp_zone_event.title, "ENGINE HOT", sizeof(temp_zone_event.title));
+        snprintf(temp_zone_event.description, sizeof(temp_zone_event.description), "Engine temperature is high (zone %d to %d)", old_temp_zone, engine_temp_zone);
+        temp_zone_event.timestamp = time_elapsed_total;
+        enqueue_event(&temp_zone_event);
+      }
+    }
+
+    // lock fuel to check fuel levels and potentially log low fuel event
+    pthread_mutex_lock(&fuelLock);
     // if engine is overheating or fuel is low, limit max speed & rpm
     if (engine_temp_zone == 3 || fuel < 0.7)
     {
       max_speed = 80;
       max_rpm = 8000;
+      if (limiting_speed_rpm_event == 0)
+      {
+        struct Event limiting_event;
+        strncpy(limiting_event.title, "LIMITING SPEED AND RPM", sizeof(limiting_event.title));
+        snprintf(limiting_event.description, sizeof(limiting_event.description), "ECU is limiting speed and rpm due to %s", (engine_temp_zone == 3) ? "overheating" : "low fuel");
+        limiting_event.timestamp = time_elapsed_total;
+        enqueue_event(&limiting_event);
+        limiting_speed_rpm_event = 1; // set variable to indicate we just limited speed and rpm so we can log an event in the dashboard thread
+      }
     }
     else
     {
       max_speed = 200;
       max_rpm = 16500;
+      limiting_speed_rpm_event = 0; // reset variable since we are no longer limiting speed and rpm
     }
+
+    pthread_mutex_unlock(&motionLock); // unlock motion since we no longer need to check speed
+    pthread_mutex_unlock(&engineLock); // unlock engine since we no longer need to checkrpm or temps
 
     // if fuel is less than 0.7 gallons, enable the low fuel warning
     if (fuel < 0.7)
@@ -542,6 +583,9 @@ void *ecu_thread(void *arg)
       low_fuel_warning = 0;
     }
 
+    pthread_mutex_unlock(&fuelLock); // unlock fuel since we no longer need to check fuel levels
+
+    pthread_mutex_lock(&hybridAssistLock); // lock hybrid assist to check battery levels and hybrid assist status
     // hybrid assist system checks
     // if battery level is less than 20%, disable electric assist and set hybrid mode to none
     if (battery_level < 20)
@@ -559,6 +603,8 @@ void *ecu_thread(void *arg)
     {
       electric_assist_allowed = 1;
     }
+
+    pthread_mutex_unlock(&hybridAssistLock); // unlock hybrid assist since we no longer need to check rpm zones or temps
   }
 
   return NULL;
@@ -575,11 +621,12 @@ void *hybrid_assist_thread(void *arg)
     // Condition Variable
     // Wait for speed change from motion thread before applying hybrid assist logic
     pthread_mutex_lock(&hybridAssistConditionalLock);
-    //loop while hybrid update is 0 to avoid waiting on the conditional if the variable is already set to 1 from a previous signal
-    while (hybrid_update == 0) {
+    // loop while hybrid update is 0 to avoid waiting on the conditional if the variable is already set to 1 from a previous signal
+    while (hybrid_update == 0)
+    {
       pthread_cond_wait(&speedChangeConditional, &hybridAssistConditionalLock);
     }
-    //set hybrid update back to 0 after waking up to wait for the next signal
+    // set hybrid update back to 0 after waking up to wait for the next signal
     hybrid_update = 0;
     pthread_mutex_unlock(&hybridAssistConditionalLock);
 
@@ -650,7 +697,22 @@ void *hybrid_assist_thread(void *arg)
     // check hybrid mode for event logging
     if (hybrid_mode != previous_mode)
     {
-      hybridAssistChange = 1;
+      if (hybrid_mode == 0)
+      {
+        struct Event hybrid_event;
+        strncpy(hybrid_event.title, "HYBRID ASSIST OFF", sizeof(hybrid_event.title));
+        snprintf(hybrid_event.description, sizeof(hybrid_event.description), "Hybrid assist turned off, previous mode was %d", previous_mode);
+        hybrid_event.timestamp = time_elapsed_total;
+        enqueue_event(&hybrid_event);
+      }
+      else
+      {
+        struct Event hybrid_event;
+        strncpy(hybrid_event.title, "HYBRID MODE CHANGE", sizeof(hybrid_event.title));
+        snprintf(hybrid_event.description, sizeof(hybrid_event.description), "Hybrid mode changed from %d to %d", previous_mode, hybrid_mode);
+        hybrid_event.timestamp = time_elapsed_total;
+        enqueue_event(&hybrid_event);
+      }
       previous_mode = hybrid_mode;
     }
 
@@ -739,6 +801,7 @@ void print_dashboard(void)
 {
   char *eng_status = (engine_state == 1) ? "ON" : "OFF";
 
+  pthread_mutex_lock(&dashboardLock);
   char *signal_label;
   if (signal_state == 1)
     signal_label = "< LEFT";
@@ -749,8 +812,13 @@ void print_dashboard(void)
   else
     signal_label = "OFF";
 
-  char *headlight_label = (headlight_state == 1) ? "* ON" : "o OFF";
+  char *headlight_label = (headlight_state == 1) ? "ON" : "OFF";
+  struct Time local_time_elapsed_total = time_elapsed_total; // copy total time elapsed to a local variable to avoid keeping the lock for too long while printing
+  struct Time local_time_elapsed_trip = time_elapsed_trip;   // copy trip time elapsed to a local
 
+  pthread_mutex_unlock(&dashboardLock);
+
+  pthread_mutex_lock(&engineLock);
   char *temp_zone_label;
   if (engine_temp_zone == 0)
     temp_zone_label = "COLD";
@@ -773,6 +841,17 @@ void print_dashboard(void)
   else
     rpm_zone_label = "OFF";
 
+  int local_engine_temp = engine_temp; // copy engine temp to a local variable to avoid keeping the lock for too long while printing
+  int local_rpm = rpm;                 // copy rpm to a local variable to avoid keeping the lock for too long while printing
+  pthread_mutex_unlock(&engineLock);
+
+  pthread_mutex_lock(&motionLock);
+  int local_speed = speed;
+  float local_distance_total = distance_total;
+  float local_distance_trip = distance_trip;
+  pthread_mutex_unlock(&motionLock);
+
+  pthread_mutex_lock(&hybridAssistLock);
   char *hybrid_mode_label;
   if (hybrid_mode == 1)
     hybrid_mode_label = "CRUISING";
@@ -786,6 +865,19 @@ void print_dashboard(void)
   char *elec_assist_label = (electric_assist_state == 1) ? "ON" : "OFF";
   char *charging_label = (charging_state == 1) ? "ON" : "OFF";
 
+  char batt_bar[21];
+  int batt_filled = (battery_level * 20) / 100;
+  if (batt_filled < 0)
+    batt_filled = 0;
+  if (batt_filled > 20)
+    batt_filled = 20;
+  for (int i = 0; i < 20; i++)
+    batt_bar[i] = (i < batt_filled) ? '#' : '-';
+  batt_bar[20] = '\0';
+  float local_battery_level = battery_level;
+  pthread_mutex_unlock(&hybridAssistLock);
+
+  pthread_mutex_lock(&fuelLock);
   char fuel_bar[21];
   int fuel_filled = (int)((fuel / 4.7f) * 20);
   if (fuel_filled < 0)
@@ -796,17 +888,18 @@ void print_dashboard(void)
     fuel_bar[i] = (i < fuel_filled) ? '#' : '-';
   fuel_bar[20] = '\0';
 
+  float local_fuel = fuel; // copy fuel to a local variable to avoid keeping the lock for too long while printing
   char *low_fuel_label = (low_fuel_warning == 1) ? "!! LOW FUEL !!" : "";
+  pthread_mutex_unlock(&fuelLock);
 
-  char batt_bar[21];
-  int batt_filled = (battery_level * 20) / 100;
-  if (batt_filled < 0)
-    batt_filled = 0;
-  if (batt_filled > 20)
-    batt_filled = 20;
-  for (int i = 0; i < 20; i++)
-    batt_bar[i] = (i < batt_filled) ? '#' : '-';
-  batt_bar[20] = '\0';
+  pthread_mutex_lock(&eventQueueLock);
+  struct Event local_event_log[3] = {0};
+  int local_event_count = event_count;
+  for (int i = local_event_count - 1; i > local_event_count - 4 && i >= 0; i--)
+  {
+    local_event_log[local_event_count - 1 - i] = event_log[i];
+  }
+  pthread_mutex_unlock(&eventQueueLock);
 
   printf("╔════════════════════════════════════════════════════════════════════"
          "═════════╗\n");
@@ -815,29 +908,29 @@ void print_dashboard(void)
          "═════════║\n");
 
   print_dash_row("  ENGINE: %s  |  TEMP: %3d C (%s)  |  RPM: %5d (%s)",
-                 eng_status, engine_temp, temp_zone_label, rpm, rpm_zone_label);
+                 eng_status, local_engine_temp, temp_zone_label, local_rpm, rpm_zone_label);
 
-  print_dash_row("  SPEED: %3d mph", speed);
+  print_dash_row("  SPEED: %3d mph", local_speed);
 
   printf("║────────────────────────────────────────────────────────────────────"
          "─────────║\n");
 
-  print_dash_row("  FUEL   [%-20s]  %4.2f gal  %s", fuel_bar, fuel,
+  print_dash_row("  FUEL   [%-20s]  %4.2f gal  %s", fuel_bar, local_fuel,
                  low_fuel_label);
 
   print_dash_row("  DIST TOTAL: %8.1f mi        DIST TRIP: %6.1f mi",
-                 distance_total, distance_trip);
+                 local_distance_total, local_distance_trip);
 
   printf("║────────────────────────────────────────────────────────────────────"
          "─────────║\n");
 
   print_dash_row("  TIME ELAPSED (TOTAL): %02d:%02d:%02d",
-                 time_elapsed_total.hours, time_elapsed_total.minutes,
-                 time_elapsed_total.seconds);
+                 local_time_elapsed_total.hours, local_time_elapsed_total.minutes,
+                 local_time_elapsed_total.seconds);
 
   print_dash_row("  TIME ELAPSED (TRIP):  %02d:%02d:%02d",
-                 time_elapsed_trip.hours, time_elapsed_trip.minutes,
-                 time_elapsed_trip.seconds);
+                 local_time_elapsed_trip.hours, local_time_elapsed_trip.minutes,
+                 local_time_elapsed_trip.seconds);
 
   printf("║────────────────────────────────────────────────────────────────────"
          "─────────║\n");
@@ -848,7 +941,7 @@ void print_dashboard(void)
   printf("║═══════════════════════════ HYBRID ASSIST SYSTEM "
          "════════════════════════════║\n");
 
-  print_dash_row("  BATTERY  [%-20s]  %3.2f%%", batt_bar, battery_level);
+  print_dash_row("  BATTERY  [%-20s]  %3.2f%%", batt_bar, local_battery_level);
 
   print_dash_row("  ELECTRIC ASSIST: %s    CHARGING: %s    HYBRID MODE: %s",
                  elec_assist_label, charging_label, hybrid_mode_label);
@@ -856,14 +949,13 @@ void print_dashboard(void)
   printf("║═══════════════════════════════ EVENT LOG "
          "═══════════════════════════════════║\n");
 
-  int start = (event_count >= 3) ? event_count - 3 : 0;
   int display_num = 1;
 
-  for (int i = start; i < event_count; i++)
+  for (int i = 0; i < 3; i++)
   {
     print_dash_row("  %d. [%02d:%02d:%02d] %s", display_num,
-                   event_log[i].timestamp.hours, event_log[i].timestamp.minutes,
-                   event_log[i].timestamp.seconds, event_log[i].description);
+                   local_event_log[i].timestamp.hours, local_event_log[i].timestamp.minutes,
+                   local_event_log[i].timestamp.seconds, local_event_log[i].description);
     display_num++;
   }
 
@@ -902,6 +994,7 @@ void *time_thread(void *arg)
 {
   while (1)
   {
+    pthread_mutex_lock(&dashboardLock);
     time_elapsed_trip.seconds++;
     if (time_elapsed_trip.seconds == 60)
     {
@@ -925,6 +1018,7 @@ void *time_thread(void *arg)
       time_elapsed_total.minutes = 0;
       time_elapsed_total.hours++;
     }
+    pthread_mutex_unlock(&dashboardLock);
     sleep(1);
   }
   return NULL;
@@ -932,7 +1026,7 @@ void *time_thread(void *arg)
 
 void init_from_args(int argc, char *argv[])
 {
-  if (argc < 6)
+  if (argc <= 6)
   {
     printf("Usage: %s <RPM> <ENGINE_STATE> <SPEED> <FUEL_LEVEL> <A/D> <BATTERY_LEVEL>\n", argv[0]);
     exit(1);
@@ -982,11 +1076,8 @@ int main(int argc, char *argv[])
 
   event_count = 0;
   event_queue_count = 0;
-  newRPMZone = 0;
-  hybridAssistChange = 0;
   wheelSlipDetected = 0;
   last_fuel_amount_logged = -1;
-  last_battery_amount_logged = -1;
   ecu_update = 1; // set to 1 so ecu begins by checking initial conditions
   engine_off_decelerate = 0;
   max_speed = 200;
