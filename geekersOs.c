@@ -31,7 +31,7 @@ struct Event
   struct Time timestamp;
 };
 
-//enum for system state
+// enum for system state
 typedef enum
 {
   ENGINE_OFF_STATE,
@@ -597,9 +597,12 @@ void *ecu_thread(void *arg)
 
     pthread_mutex_unlock(&fuelLock); // unlock fuel since we no longer need to check fuel levels
 
-    //have ECU model system state with enum
-    //not sure if this is correct as we never do anything with the enum
-    //maybe in future phase
+    // have ECU model system state with enum
+    // not sure if this is correct as we never do anything with the enum
+    // maybe in future phase
+    // lock engine, motion, and ecu to update system state since it relies on all of those variables, maintain locking order
+    pthread_mutex_lock(&engineLock);
+    pthread_mutex_lock(&motionLock);
     pthread_mutex_lock(&ecuLock);
     if (engine_state == 0)
     {
@@ -621,6 +624,8 @@ void *ecu_thread(void *arg)
     {
       system_state = NORMAL_STATE;
     }
+    pthread_mutex_unlock(&engineLock);
+    pthread_mutex_unlock(&motionLock);
     pthread_mutex_unlock(&ecuLock);
 
     pthread_mutex_lock(&hybridAssistLock); // lock hybrid assist to check battery levels and hybrid assist status
@@ -1121,6 +1126,7 @@ int main(int argc, char *argv[])
   max_speed = 200;
   max_rpm = 16500;
   hybrid_update = 1; // set to 1 so hybrid assist thread checks conditions on startup
+  system_state = NORMAL_STATE;
 
   // initialize all mutex's
   pthread_mutex_init(&engineLock, NULL);
