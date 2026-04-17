@@ -711,7 +711,7 @@ void *hybrid_assist_thread(void *arg)
           charging_state = 0;
           battery_level -= 0.07;
         }
-        else if (speed > 60 && speed <= 90)
+        else if (speed > 60 && speed <= max_speed)
         {
           electric_assist_state = 1;
           hybrid_mode = 2;
