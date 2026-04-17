@@ -961,7 +961,7 @@ void print_dashboard(void)
   printf("║────────────────────────────────────────────────────────────────────"
          "─────────║\n");
 
-  print_dash_row("  FUEL   [%-20s]  %4.2f gal  %s", fuel_bar, local_fuel,
+  print_dash_row("  FUEL    [%-20s]  %4.2f gal  %s", fuel_bar, local_fuel,
                  low_fuel_label);
 
   print_dash_row("  DIST TOTAL: %8.1f mi        DIST TRIP: %6.1f mi",
