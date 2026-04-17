@@ -31,6 +31,18 @@ struct Event
   struct Time timestamp;
 };
 
+//enum for system state
+typedef enum
+{
+  ENGINE_OFF_STATE,
+  IDLE_STATE,
+  NORMAL_STATE,
+  HIGH_LOAD_STATE,
+  CRITICAL_STATE
+} SystemState;
+
+SystemState system_state;
+
 // ENGINE SUBSYSTEM VARIABLES
 pthread_mutex_t engineLock; // mutex lock for engine subsystem
 int engine_state;           // 0 = off, 1 = on
@@ -361,8 +373,8 @@ void *fuel_thread(void *arg)
 
     pthread_mutex_unlock(&fuelEngineOnLock);
 
+    pthread_mutex_lock(&engineLock); // also lock engine since we need to check rpm zones, maintain locking order present throughout all threads
     pthread_mutex_lock(&fuelLock);
-    pthread_mutex_lock(&engineLock); // also lock engine since we need to check rpm zones
 
     if (rpm_zone == 0)
     { // Idle = [1100═1300)
@@ -584,6 +596,32 @@ void *ecu_thread(void *arg)
     }
 
     pthread_mutex_unlock(&fuelLock); // unlock fuel since we no longer need to check fuel levels
+
+    //have ECU model system state with enum
+    //not sure if this is correct as we never do anything with the enum
+    //maybe in future phase
+    pthread_mutex_lock(&ecuLock);
+    if (engine_state == 0)
+    {
+      system_state = ENGINE_OFF_STATE;
+    }
+    else if (engine_temp_zone == 3)
+    {
+      system_state = CRITICAL_STATE;
+    }
+    else if (rpm_zone == 2 || rpm_zone == 3)
+    {
+      system_state = HIGH_LOAD_STATE;
+    }
+    else if (speed == 0)
+    {
+      system_state = IDLE_STATE;
+    }
+    else
+    {
+      system_state = NORMAL_STATE;
+    }
+    pthread_mutex_unlock(&ecuLock);
 
     pthread_mutex_lock(&hybridAssistLock); // lock hybrid assist to check battery levels and hybrid assist status
     // hybrid assist system checks
