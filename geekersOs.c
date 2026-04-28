@@ -12,6 +12,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <semaphore.h>
+//Phase 3 Includes
+#include <termios.h> //controls i/o with terminal
+#include <sys/select.h> 
+#include <ctype.h>
 
 #define MAX_EVENTS 50
 
@@ -42,6 +46,12 @@ typedef enum
 } SystemState;
 
 SystemState system_state;
+
+//Phase 3 Globals
+//volatile keyword given by chatgpt to ensure this variable is never cached by a thread and is always read from main memory
+//so that a thread never ends up in an infinite loop if it didnt read variable correctly
+volatile int running = 1; //acts as a kill switch for the while (1) loops to appropriately terminate the program on 'quit'
+struct termios original_terminal; //struct variable to store the original terminal settings so we can restore them on exit
 
 // ENGINE SUBSYSTEM VARIABLES
 pthread_mutex_t engineLock; // mutex lock for engine subsystem
@@ -109,6 +119,48 @@ int limiting_speed_rpm_event; // variable to track if we just limited speed and 
 int wheelSlipDetected;        // variable to store if wheel slip is detected, 0 = no
                               // slip, 1 = slip detected
 
+//TERMINAL HELPER FUNCTIONS
+//setup terminal with new modifications
+void setup_terminal(void)
+{
+  //create a new terminal instance with termios
+  struct termios new_terminal;
+  //get the current terminal settings and store them to the global variable
+  //for restoration later
+  tcgetattr(STDIN_FILENO, &original_terminal);
+
+  //copy original settings into the new_terminal struct for modification
+  new_terminal = original_terminal;
+
+  //disable canonical mode (ICANON)
+  //normally input is buffered until ENTER is pressed
+  //turning this off means each key press is available immediately
+  new_terminal.c_lflag &= ~ICANON;
+
+  //disable echo (ECHO)
+  //prevents typed characters (W, S, etc.) from appearing on screen
+  new_terminal.c_lflag &= ~ECHO;
+
+  //set minimum number of characters for read()
+  //VMIN = 0, read() will NOT wait for input (non-blocking)
+  new_terminal.c_cc[VMIN] = 0;
+
+  //set timeout for read()
+  //VTIME = 0, read() returns immediately (no waiting)
+  new_terminal.c_cc[VTIME] = 0;
+
+  //apply the modified terminal settings immediately
+  //TCSANOW = apply changes right now
+  tcsetattr(STDIN_FILENO, TCSANOW, &new_terminal);
+}
+
+//restore terminal to original state stored in global variable
+void restore_terminal(void)
+{
+  //restore the terminal back to its original settings
+  tcsetattr(STDIN_FILENO, TCSANOW, &original_terminal);
+}
+
 // helper function to notify ecu thread of a change that must be looked at, can be called by any subsytem
 void notify_ecu(void)
 {
@@ -137,6 +189,101 @@ void enqueue_event(const struct Event *newEvent)
   // signal that there is a new event in the queue and we unlock the mutex
   pthread_cond_signal(&eventQueueConditional);
   pthread_mutex_unlock(&eventQueueLock);
+}
+
+//Input Subsystem
+//handles all keyboard inputs for phase 3
+void *input_thread(void *arg)
+{
+  //loop infinitely while the program is running
+  while (running)
+  {
+    //set up the file descriptor set for select() to monitor stdin for input
+    fd_set readfds;
+    //set up the timeout for select() so we can periodically check for input without blocking indefinitely
+    struct timeval timeout;
+    //variable to store the key that was pressed
+    char key;
+
+    //initialize the file descriptor set to monitor stdin
+    FD_ZERO(&readfds);
+    //add stdin file descriptor to the set
+    FD_SET(STDIN_FILENO, &readfds);
+
+    //set the timeout to 0.1 seconds so we check for input every 0.1 seconds
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 100000; // check every 0.1 seconds
+
+    //define a ready variable to store the result of select()
+    //it will be > 0 if there is input ready to be read, 0 if timeout occurred
+    //and < 0 if an error occurred
+    int ready = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &timeout);
+
+    //if there is an input to be read, read it and handle the corresponding action
+    if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds))
+    {
+      //read a single character from stdin, since we set VMIN = 0 and VTIME = 0 in our terminal settings
+      if (read(STDIN_FILENO, &key, 1) > 0)
+      {
+        //convert the key to uppercase to simplify handling both lowercase and uppercase inputs
+        key = toupper(key);
+
+        //use a switch case to handle conditions
+        switch (key) {
+          case 'W':
+            // TODO: accelerate
+            break;
+
+          case 'S':
+            // TODO: decelerate
+            break;
+
+          case 'C':
+            // TODO: cruise
+            break;
+
+          case 'A':
+            // TODO: left signal
+            break;
+
+          case 'D':
+            // TODO: right signal
+            break;
+
+          case 'Z':
+            // TODO: hazards
+            break;
+
+          case 'H':
+            // TODO: headlight
+            break;
+
+          case 'F':
+            // TODO: refuel
+            break;
+
+          case 'K':
+            // TODO: kill switch
+            break;
+
+          case 'I':
+            // TODO: ignition
+            break;
+
+          case 'B':
+            // TODO: battery mode
+            break;
+          
+          case 'Q':
+            //set running to 0 to kill all threads
+            running = 0;
+            break;
+        }
+      }
+    }
+  }
+
+  return NULL;
 }
 
 // Engine Subsystem
@@ -1093,6 +1240,11 @@ int main(int argc, char *argv[])
 
   init_from_args(argc, argv);
 
+  //setup the terminal for inputs
+  setup_terminal();
+  //restore terminal settings on exit
+  atexit(restore_terminal);
+
   rpm_zone = 0;
   engine_temp = 45; // cold start
   engine_temp_zone = 0;
@@ -1153,9 +1305,10 @@ int main(int argc, char *argv[])
   pthread_cond_init(&fuelEngineOnConditional, NULL);
 
   // create threads
-  pthread_t engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
+  pthread_t input_tid, engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
       event_tid, dashboard_tid, time_tid;
-
+  
+  pthread_create(&input_tid, NULL, input_thread, NULL);
   pthread_create(&engine_tid, NULL, engine_thread, NULL);
   pthread_create(&motion_tid, NULL, motion_thread, NULL);
   pthread_create(&fuel_tid, NULL, fuel_thread, NULL);
@@ -1165,6 +1318,7 @@ int main(int argc, char *argv[])
   pthread_create(&dashboard_tid, NULL, dashboard_thread, NULL);
   pthread_create(&time_tid, NULL, time_thread, NULL);
   // Wait (threads run indefinitely)
+  pthread_join(input_tid, NULL);
   pthread_join(engine_tid, NULL);
   pthread_join(motion_tid, NULL);
   pthread_join(fuel_tid, NULL);
