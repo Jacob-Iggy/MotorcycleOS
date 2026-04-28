@@ -277,6 +277,31 @@ void *input_thread(void *arg)
           case 'Q':
             //set running to 0 to kill all threads
             running = 0;
+
+            //destroy every mutex
+            pthread_mutex_destroy(&engineLock);
+            pthread_mutex_destroy(&motionLock);
+            pthread_mutex_destroy(&fuelLock);
+            pthread_mutex_destroy(&ecuLock);
+            pthread_mutex_destroy(&hybridAssistLock);
+            pthread_mutex_destroy(&eventQueueLock);
+            pthread_mutex_destroy(&dashboardLock);
+            pthread_mutex_destroy(&ecuConditionalLock);
+            pthread_mutex_destroy(&motionConditionalLock);
+            pthread_mutex_destroy(&hybridAssistConditionalLock);
+            pthread_mutex_destroy(&fuelEngineOnLock);
+
+            //destroy all conditionals
+            pthread_cond_destroy(&ecuConditional);
+            pthread_cond_destroy(&eventQueueConditional);
+            pthread_cond_destroy(&eventQueueNotFullConditional);
+            pthread_cond_destroy(&engineOnConditional);
+            pthread_cond_destroy(&speedChangeConditional);
+            pthread_cond_destroy(&fuelEngineOnConditional);
+
+            restore_terminal(); // restore terminal settings before exiting
+            
+            //break out of loop
             break;
         }
       }
