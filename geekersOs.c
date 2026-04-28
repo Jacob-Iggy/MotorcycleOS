@@ -292,7 +292,7 @@ void *engine_thread(void *arg)
 {
   int rpm_direction = 1; // 1 = rpms increase, -1 = rpms decrease
 
-  while (1)
+  while (running)
   {
     // critical
     pthread_mutex_lock(&engineLock);
@@ -407,7 +407,7 @@ void *engine_thread(void *arg)
 void *motion_thread(void *arg)
 {
   // direction and initial speed are auto determined by command line
-  while (1)
+  while (running)
   {
     // Condition Variable
     // Wait until the engine is actually ON
@@ -507,7 +507,7 @@ void *motion_thread(void *arg)
 // Fuel Subsystem
 void *fuel_thread(void *arg)
 {
-  while (1)
+  while (running)
   {
     // crit sect. wait for engine to be on
     pthread_mutex_lock(&fuelEngineOnLock);
@@ -578,7 +578,7 @@ void *fuel_thread(void *arg)
 void *ecu_thread(void *arg)
 {
 
-  while (1)
+  while (running)
   {
 
     // first thing is to lock the conditional lock or wait for it to be signaled
@@ -806,7 +806,7 @@ void *hybrid_assist_thread(void *arg)
   // keep track of previous mode for ECU
   int previous_mode = hybrid_mode;
 
-  while (1)
+  while (running)
   {
     // Condition Variable
     // Wait for speed change from motion thread before applying hybrid assist logic
@@ -924,7 +924,7 @@ void *hybrid_assist_thread(void *arg)
 void *event_thread(void *arg)
 {
 
-  while (1)
+  while (running)
   {
     pthread_mutex_lock(&eventQueueLock);
 
@@ -1175,7 +1175,7 @@ void refresh_dashboard(void (*print_fn)(void))
 // dash subsystem
 void *dashboard_thread(void *arg)
 {
-  while (1)
+  while (running)
   {
     refresh_dashboard(print_dashboard);
     usleep(500000); // refreshes dash every 0.5 sec
@@ -1185,7 +1185,7 @@ void *dashboard_thread(void *arg)
 
 void *time_thread(void *arg)
 {
-  while (1)
+  while (running)
   {
     pthread_mutex_lock(&dashboardLock);
     time_elapsed_trip.seconds++;
