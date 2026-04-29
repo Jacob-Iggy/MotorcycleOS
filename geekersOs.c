@@ -12,9 +12,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <semaphore.h>
-//Phase 3 Includes
+// Phase 3 Includes
 #include <termios.h> //controls i/o with terminal
-#include <sys/select.h> 
+#include <sys/select.h>
 #include <ctype.h>
 
 #define MAX_EVENTS 50
@@ -47,11 +47,11 @@ typedef enum
 
 SystemState system_state;
 
-//Phase 3 Globals
-//volatile keyword given by chatgpt to ensure this variable is never cached by a thread and is always read from main memory
-//so that a thread never ends up in an infinite loop if it didnt read variable correctly
-volatile int running = 1; //acts as a kill switch for the while (1) loops to appropriately terminate the program on 'quit'
-struct termios original_terminal; //struct variable to store the original terminal settings so we can restore them on exit
+// Phase 3 Globals
+// volatile keyword given by chatgpt to ensure this variable is never cached by a thread and is always read from main memory
+// so that a thread never ends up in an infinite loop if it didnt read variable correctly
+volatile int running = 1;         // acts as a kill switch for the while (1) loops to appropriately terminate the program on 'quit'
+struct termios original_terminal; // struct variable to store the original terminal settings so we can restore them on exit
 
 // ENGINE SUBSYSTEM VARIABLES
 pthread_mutex_t engineLock; // mutex lock for engine subsystem
@@ -91,11 +91,13 @@ int electric_assist_allowed;                 // 0 = not allowed, 1 = allowed bas
 int charging_state;                          // 0 = off, 1 = on
 int hybrid_mode;                             // 0 = none, 1 = cruising, 2 = assist, 3 = regeneration
 int hybrid_update;                           // variable for hybrid assist thread to know if it needs to check conditions and update assist state
-int battery_mode_on; //variable for input "B" for phase 3 (1 means battery mode is on, 0 means battery mode is off)
+int battery_mode_on;                         // variable for input "B" for phase 3 (1 means battery mode is on, 0 means battery mode is off)
 
 // DASHBOARD SUBSYSTEM VARIABLES
 pthread_mutex_t dashboardLock;  // mutex lock for dashboard subsystem
-int signal_state;               // 0 = off, 1 = left, 2 = right, 3 = hazards
+int left_signal_on;             // variable to track if left signal is on for blinking behavior
+int right_signal_on;            // variable to track if right signal is on for blinking behavior
+int hazard_state;               // 0 = off, 1 = on
 int headlight_state;            // 0 = off, 1 = on
 struct Time time_elapsed_total; // in seconds
 struct Time time_elapsed_trip;  // in seconds
@@ -120,45 +122,45 @@ int limiting_speed_rpm_event; // variable to track if we just limited speed and 
 int wheelSlipDetected;        // variable to store if wheel slip is detected, 0 = no
                               // slip, 1 = slip detected
 
-//TERMINAL HELPER FUNCTIONS
-//setup terminal with new modifications
+// TERMINAL HELPER FUNCTIONS
+// setup terminal with new modifications
 void setup_terminal(void)
 {
-  //create a new terminal instance with termios
+  // create a new terminal instance with termios
   struct termios new_terminal;
-  //get the current terminal settings and store them to the global variable
-  //for restoration later
+  // get the current terminal settings and store them to the global variable
+  // for restoration later
   tcgetattr(STDIN_FILENO, &original_terminal);
 
-  //copy original settings into the new_terminal struct for modification
+  // copy original settings into the new_terminal struct for modification
   new_terminal = original_terminal;
 
-  //disable canonical mode (ICANON)
-  //normally input is buffered until ENTER is pressed
-  //turning this off means each key press is available immediately
+  // disable canonical mode (ICANON)
+  // normally input is buffered until ENTER is pressed
+  // turning this off means each key press is available immediately
   new_terminal.c_lflag &= ~ICANON;
 
-  //disable echo (ECHO)
-  //prevents typed characters (W, S, etc.) from appearing on screen
+  // disable echo (ECHO)
+  // prevents typed characters (W, S, etc.) from appearing on screen
   new_terminal.c_lflag &= ~ECHO;
 
-  //set minimum number of characters for read()
-  //VMIN = 0, read() will NOT wait for input (non-blocking)
+  // set minimum number of characters for read()
+  // VMIN = 0, read() will NOT wait for input (non-blocking)
   new_terminal.c_cc[VMIN] = 0;
 
-  //set timeout for read()
-  //VTIME = 0, read() returns immediately (no waiting)
+  // set timeout for read()
+  // VTIME = 0, read() returns immediately (no waiting)
   new_terminal.c_cc[VTIME] = 0;
 
-  //apply the modified terminal settings immediately
-  //TCSANOW = apply changes right now
+  // apply the modified terminal settings immediately
+  // TCSANOW = apply changes right now
   tcsetattr(STDIN_FILENO, TCSANOW, &new_terminal);
 }
 
-//restore terminal to original state stored in global variable
+// restore terminal to original state stored in global variable
 void restore_terminal(void)
 {
-  //restore the terminal back to its original settings
+  // restore the terminal back to its original settings
   tcsetattr(STDIN_FILENO, TCSANOW, &original_terminal);
 }
 
@@ -192,140 +194,165 @@ void enqueue_event(const struct Event *newEvent)
   pthread_mutex_unlock(&eventQueueLock);
 }
 
-//Input Subsystem
-//handles all keyboard inputs for phase 3
+// Input Subsystem
+// handles all keyboard inputs for phase 3
 void *input_thread(void *arg)
 {
-  //loop infinitely while the program is running
+  // loop infinitely while the program is running
   while (running)
   {
-    //set up the file descriptor set for select() to monitor stdin for input
+    // set up the file descriptor set for select() to monitor stdin for input
     fd_set readfds;
-    //set up the timeout for select() so we can periodically check for input without blocking indefinitely
+    // set up the timeout for select() so we can periodically check for input without blocking indefinitely
     struct timeval timeout;
-    //variable to store the key that was pressed
+    // variable to store the key that was pressed
     char key;
 
-    //initialize the file descriptor set to monitor stdin
+    // initialize the file descriptor set to monitor stdin
     FD_ZERO(&readfds);
-    //add stdin file descriptor to the set
+    // add stdin file descriptor to the set
     FD_SET(STDIN_FILENO, &readfds);
 
-    //set the timeout to 0.1 seconds so we check for input every 0.1 seconds
+    // set the timeout to 0.1 seconds so we check for input every 0.1 seconds
     timeout.tv_sec = 0;
     timeout.tv_usec = 100000; // check every 0.1 seconds
 
-    //define a ready variable to store the result of select()
-    //it will be > 0 if there is input ready to be read, 0 if timeout occurred
-    //and < 0 if an error occurred
+    // define a ready variable to store the result of select()
+    // it will be > 0 if there is input ready to be read, 0 if timeout occurred
+    // and < 0 if an error occurred
     int ready = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &timeout);
 
-    //if there is an input to be read, read it and handle the corresponding action
+    // if there is an input to be read, read it and handle the corresponding action
     if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds))
     {
-      //read a single character from stdin, since we set VMIN = 0 and VTIME = 0 in our terminal settings
+      // read a single character from stdin, since we set VMIN = 0 and VTIME = 0 in our terminal settings
       if (read(STDIN_FILENO, &key, 1) > 0)
       {
-        //convert the key to uppercase to simplify handling both lowercase and uppercase inputs
+        // convert the key to uppercase to simplify handling both lowercase and uppercase inputs
         key = toupper(key);
 
-        //use a switch case to handle conditions
-        switch (key) {
-          case 'W':
-            // TODO: accelerate
-            break;
+        // use a switch case to handle conditions
+        switch (key)
+        {
+        case 'W':
+          // TODO: accelerate
+          pthread_mutex_lock(&motionLock);
+          direction = 1; // set direction to 1 for accelerating
+          pthread_mutex_unlock(&motionLock);
+          notify_ecu(); // notify ecu of a change so it can check conditions and potentially update system state
+          break;
 
-          case 'S':
-            // TODO: decelerate
-            break;
+        case 'S':
+          // TODO: decelerate
+          pthread_mutex_lock(&motionLock);
+          direction = -1; // set direction to -1 for decelerating
+          pthread_mutex_unlock(&motionLock);
+          notify_ecu(); // notify ecu of a change so it can check conditions and potentially update system state
+          break;
 
-          case 'C':
-            // TODO: cruise
-            break;
+        case 'C':
+          // TODO: cruise
+          pthread_mutex_lock(&motionLock);
+          direction = 0; // set direction to 0 for cruising
+          pthread_mutex_unlock(&motionLock);
+          notify_ecu(); // notify ecu of a change so it can check conditions and potentially update system state
+          break;
 
-          case 'A':
-            // TODO: left signal
-            break;
+        case 'A':
+          // TODO: left signal
+          pthread_mutex_lock(&dashboardLock);
+          left_signal_on = left_signal_on == 1 ? 0 : 1; // toggle left signal on/off, if its currently on set to off, if its currently off set to left signal
+          pthread_mutex_unlock(&dashboardLock);
+          break;
 
-          case 'D':
-            // TODO: right signal
-            break;
+        case 'D':
+          // TODO: right signal
+          pthread_mutex_lock(&dashboardLock);
+          right_signal_on = right_signal_on == 1 ? 0 : 1; // toggle right signal on/off, if its currently on set to off, if its currently off set to right signal
+          pthread_mutex_unlock(&dashboardLock);
+          break;
 
-          case 'Z':
-            // TODO: hazards
-            break;
+        case 'Z':
+          // TODO: hazards
+          pthread_mutex_lock(&dashboardLock);
+          hazard_state = hazard_state == 1 ? 0 : 1; // toggle hazards on/off, if its currently on set to off, if its currently off set to on
+          pthread_mutex_unlock(&dashboardLock);
+          break;
 
-          case 'H':
-            // TODO: headlight
-            break;
+        case 'H':
+          // TODO: headlight
+          pthread_mutex_lock(&dashboardLock);
+          headlight_state = headlight_state == 1 ? 0 : 1; // toggle headlight on/off, if its currently on set to off, if its currently off set to on
+          pthread_mutex_unlock(&dashboardLock);
+          break;
 
-          case 'F':
-            // TODO: refuel
-            break;
+        case 'F':
+          // TODO: refuel
+          break;
 
-          case 'K':
-            // TODO: kill switch
-            break;
+        case 'K':
+          // TODO: kill switch
+          break;
 
-          case 'I':
-            // TODO: ignition
-            break;
+        case 'I':
+          // TODO: ignition
+          break;
 
-          case 'B':
-            //lock hybrid assist mutex to safely update the battery mode variable that is used in the hybrid assist thread
-            pthread_mutex_lock(&hybridAssistLock);
-            //allow toggling battery mode on and off if the battery level is above 0
-            if (battery_level > 0)
-            {
-              battery_mode_on = !battery_mode_on;
-            }
-            //if empty then we cant use battery
-            else
-            {
-              battery_mode_on = 0;
-            }
-            //unlock mutext
-            pthread_mutex_unlock(&hybridAssistLock);
+        case 'B':
+          // lock hybrid assist mutex to safely update the battery mode variable that is used in the hybrid assist thread
+          pthread_mutex_lock(&hybridAssistLock);
+          // allow toggling battery mode on and off if the battery level is above 0
+          if (battery_level > 0)
+          {
+            battery_mode_on = !battery_mode_on;
+          }
+          // if empty then we cant use battery
+          else
+          {
+            battery_mode_on = 0;
+          }
+          // unlock mutext
+          pthread_mutex_unlock(&hybridAssistLock);
 
-            //alert hybrid assist thread that there was a change
-            pthread_mutex_lock(&hybridAssistConditionalLock);
-            hybrid_update = 1;
-            pthread_cond_signal(&speedChangeConditional);
-            pthread_mutex_unlock(&hybridAssistConditionalLock);
+          // alert hybrid assist thread that there was a change
+          pthread_mutex_lock(&hybridAssistConditionalLock);
+          hybrid_update = 1;
+          pthread_cond_signal(&speedChangeConditional);
+          pthread_mutex_unlock(&hybridAssistConditionalLock);
 
-            //notify ecu
-            notify_ecu();
-            break;
-          
-          case 'Q':
-            //set running to 0 to kill all threads
-            running = 0;
+          // notify ecu
+          notify_ecu();
+          break;
 
-            //destroy every mutex
-            pthread_mutex_destroy(&engineLock);
-            pthread_mutex_destroy(&motionLock);
-            pthread_mutex_destroy(&fuelLock);
-            pthread_mutex_destroy(&ecuLock);
-            pthread_mutex_destroy(&hybridAssistLock);
-            pthread_mutex_destroy(&eventQueueLock);
-            pthread_mutex_destroy(&dashboardLock);
-            pthread_mutex_destroy(&ecuConditionalLock);
-            pthread_mutex_destroy(&motionConditionalLock);
-            pthread_mutex_destroy(&hybridAssistConditionalLock);
-            pthread_mutex_destroy(&fuelEngineOnLock);
+        case 'Q':
+          // set running to 0 to kill all threads
+          running = 0;
 
-            //destroy all conditionals
-            pthread_cond_destroy(&ecuConditional);
-            pthread_cond_destroy(&eventQueueConditional);
-            pthread_cond_destroy(&eventQueueNotFullConditional);
-            pthread_cond_destroy(&engineOnConditional);
-            pthread_cond_destroy(&speedChangeConditional);
-            pthread_cond_destroy(&fuelEngineOnConditional);
+          // destroy every mutex
+          pthread_mutex_destroy(&engineLock);
+          pthread_mutex_destroy(&motionLock);
+          pthread_mutex_destroy(&fuelLock);
+          pthread_mutex_destroy(&ecuLock);
+          pthread_mutex_destroy(&hybridAssistLock);
+          pthread_mutex_destroy(&eventQueueLock);
+          pthread_mutex_destroy(&dashboardLock);
+          pthread_mutex_destroy(&ecuConditionalLock);
+          pthread_mutex_destroy(&motionConditionalLock);
+          pthread_mutex_destroy(&hybridAssistConditionalLock);
+          pthread_mutex_destroy(&fuelEngineOnLock);
 
-            restore_terminal(); // restore terminal settings before exiting
-            
-            //break out of loop
-            break;
+          // destroy all conditionals
+          pthread_cond_destroy(&ecuConditional);
+          pthread_cond_destroy(&eventQueueConditional);
+          pthread_cond_destroy(&eventQueueNotFullConditional);
+          pthread_cond_destroy(&engineOnConditional);
+          pthread_cond_destroy(&speedChangeConditional);
+          pthread_cond_destroy(&fuelEngineOnConditional);
+
+          restore_terminal(); // restore terminal settings before exiting
+
+          // break out of loop
+          break;
         }
       }
     }
@@ -345,13 +372,13 @@ void *engine_thread(void *arg)
     // critical
     pthread_mutex_lock(&engineLock);
 
-    //check if the battery mode is on
-    //if it is set the rpm to 0
+    // check if the battery mode is on
+    // if it is set the rpm to 0
     if (battery_mode_on == 1)
     {
       rpm = 0;
-      //cool engine while battery is being used since 0 rpm
-      //45 degrees is cold start so use 50 as a baseline
+      // cool engine while battery is being used since 0 rpm
+      // 45 degrees is cold start so use 50 as a baseline
       if (engine_temp > 50)
       {
         engine_temp -= 1;
@@ -529,8 +556,15 @@ void *motion_thread(void *arg)
         // make sure speed isnt 0 or max speed
         if (!(speed <= 0 || speed == max_speed))
         {
-          // increment speed by the direction either 1 or -1
-          speed += direction;
+          if (direction == 1)
+          {
+            speed += (max_speed - speed) * 0.2 * 1; // use formula, use 0.2 as acceleration factor, multiply by 1 for delta time of 1 second
+          }
+          else if (direction == -1)
+          {
+            speed -= (speed - 0) * 0.1 * 1; // decelerate using formula, multiply by 1 for delta time of 1 second
+          }
+          // last case if direction is 0 for cruising, we can just maintain speed so do nothing
         }
       }
 
@@ -582,7 +616,7 @@ void *fuel_thread(void *arg)
 
     pthread_mutex_lock(&engineLock); // also lock engine since we need to check rpm zones, maintain locking order present throughout all threads
     pthread_mutex_lock(&fuelLock);
-    
+
     if (battery_mode_on == 1)
     {
       fuel -= 0.001; // if battery mode is on, reduce fuel by almost 0
@@ -887,8 +921,8 @@ void *hybrid_assist_thread(void *arg)
     pthread_mutex_lock(&motionLock); // for checking speed
     pthread_mutex_lock(&hybridAssistLock);
 
-    //Battery mode logic from Phase 3
-    //NEED TO CLARIFY WITH DR. K HOW THIS IS SUPPOSED TO WORK EXACTLY
+    // Battery mode logic from Phase 3
+    // NEED TO CLARIFY WITH DR. K HOW THIS IS SUPPOSED TO WORK EXACTLY
     if (battery_mode_on == 1)
     {
       electric_assist_state = 1;
@@ -909,8 +943,9 @@ void *hybrid_assist_thread(void *arg)
       }
     }
 
-    //normal hybrid assist logic
-    else {
+    // normal hybrid assist logic
+    else
+    {
       // only run hybrid assist if ECU has allowed it
       if (electric_assist_allowed == 1)
       {
@@ -1085,14 +1120,16 @@ void print_dashboard(void)
 
   pthread_mutex_lock(&dashboardLock);
   char *signal_label;
-  if (signal_state == 1)
-    signal_label = "< LEFT";
-  else if (signal_state == 2)
-    signal_label = "RIGHT >";
-  else if (signal_state == 3)
-    signal_label = "< HAZARD >";
+  if (hazard_state == 1)
+    signal_label = "<  >";
+  else if (left_signal_on == 1 && right_signal_on == 1)
+    signal_label = "<  >";
+  else if (left_signal_on == 1)
+    signal_label = "<";
+  else if (right_signal_on == 1)
+    signal_label = ">";
   else
-    signal_label = "OFF";
+    signal_label = "";
 
   char *headlight_label = (headlight_state == 1) ? "ON" : "OFF";
   struct Time local_time_elapsed_total = time_elapsed_total; // copy total time elapsed to a local variable to avoid keeping the lock for too long while printing
@@ -1329,9 +1366,9 @@ int main(int argc, char *argv[])
 
   init_from_args(argc, argv);
 
-  //setup the terminal for inputs
+  // setup the terminal for inputs
   setup_terminal();
-  //restore terminal settings on exit
+  // restore terminal settings on exit
   atexit(restore_terminal);
 
   rpm_zone = 0;
@@ -1397,7 +1434,7 @@ int main(int argc, char *argv[])
   // create threads
   pthread_t input_tid, engine_tid, motion_tid, fuel_tid, ecu_tid, hybrid_assist_tid,
       event_tid, dashboard_tid, time_tid;
-  
+
   pthread_create(&input_tid, NULL, input_thread, NULL);
   pthread_create(&engine_tid, NULL, engine_thread, NULL);
   pthread_create(&motion_tid, NULL, motion_thread, NULL);
