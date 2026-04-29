@@ -1391,7 +1391,9 @@ int main(int argc, char *argv[])
   time_elapsed_trip.minutes = 0;
   time_elapsed_trip.seconds = 0;
 
-  signal_state = 0;
+  left_signal_on = 0;
+  right_signal_on = 0;
+  hazard_state = 0;
   headlight_state = 1;
   electric_assist_state = 1;
   electric_assist_allowed = 0;
