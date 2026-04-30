@@ -53,30 +53,31 @@ SystemState system_state;
 volatile int running = 1;         // acts as a kill switch for the while (1) loops to appropriately terminate the program on 'quit'
 struct termios original_terminal; // struct variable to store the original terminal settings so we can restore them on exit
 
+// Engine State Variable
+pthread_mutex_t engineStateLock; // mutex lock for engine state
+int engine_state;
+
 // ENGINE SUBSYSTEM VARIABLES
 pthread_mutex_t engineLock; // mutex lock for engine subsystem
-int engine_state;           // 0 = off, 1 = on
 int refueling = 0;
-int rpm;                    // 0 if engine off, 1100-16500 if on
-int rpm_zone;               // 0 = idle, 1 = normal, 2 = high, 3 = redline
-int engine_temp;            // temp in degrees Celsius
-int engine_temp_zone;       // 0 = cold, 1 = normal, 2 = hot, 3 = overheat
-int max_rpm;                // variable to limit max rpm, changed by ecu if overheating
+int rpm;              // 0 if engine off, 1100-16500 if on
+int rpm_zone;         // 0 = idle, 1 = normal, 2 = high, 3 = redline
+int engine_temp;      // temp in degrees Celsius
+int engine_temp_zone; // 0 = cold, 1 = normal, 2 = hot, 3 = overheat
+int max_rpm;          // variable to limit max rpm, changed by ecu if overheating
 
 // MOTION SUBSYSTEM VARIABLES
-pthread_mutex_t motionLock;            // mutex lock for motion subsystem
-pthread_mutex_t motionConditionalLock; // mutex to protect the conditional variable for motion thread
-pthread_cond_t engineOnConditional;    // condition variable for motion thread to check if engine is on
-int speed;                             // in mph, 0 if engine off, 0-200 if on
-float distance_total;                  // in miles
-float distance_trip;                   // in miles
-int direction;                         // direction global variable for motion and hybrid assist
-int engine_off_decelerate;             // variable to track if the engine was just turned off and speed isn't 0, we must decelarate
-int max_speed;                         // variable to limit max speed, changed by ecu if overheating
+pthread_mutex_t motionLock;         // mutex lock for motion subsystem
+pthread_cond_t engineOnConditional; // condition variable for motion thread to check if engine is on
+int speed;                          // in mph, 0 if engine off, 0-200 if on
+float distance_total;               // in miles
+float distance_trip;                // in miles
+int direction;                      // direction global variable for motion and hybrid assist
+int engine_off_decelerate;          // variable to track if the engine was just turned off and speed isn't 0, we must decelarate
+int max_speed;                      // variable to limit max speed, changed by ecu if overheating
 
 // FUEL SUBSYSTEM VARIABLES
 pthread_mutex_t fuelLock;               // mutex lock for fuel subsystem
-pthread_mutex_t fuelEngineOnLock;       // Mutex to protect the fuel engine condition variable
 pthread_cond_t fuelEngineOnConditional; // Condition variable for fuel thread to wait on when engine is off
 float fuel;                             // in gallons, 0-4.7
 int low_fuel_warning;                   // 0 = no warning, 1 = low fuel warning
@@ -287,102 +288,109 @@ void *input_thread(void *arg)
           pthread_mutex_unlock(&dashboardLock);
           break;
 
-        case 'F':{
-            pthread_mutex_lock(&engineLock);
-            int eng = engine_state;
-            pthread_mutex_unlock(&engineLock);
+        case 'F':
+        {
+          pthread_mutex_lock(&engineStateLock);
+          int eng = engine_state;
+          pthread_mutex_unlock(&engineStateLock);
 
-            pthread_mutex_lock(&motionLock);
-            int spd = speed;
-            pthread_mutex_unlock(&motionLock);
+          pthread_mutex_lock(&motionLock);
+          int spd = speed;
+          pthread_mutex_unlock(&motionLock);
 
-            if (eng == 0 && spd == 0) {
-                pthread_mutex_lock(&fuelLock);
-                refueling = 1;
-                pthread_mutex_unlock(&fuelLock);
-                sleep(5);
-                pthread_mutex_lock(&fuelLock);
-                fuel = 4.7f;
-                low_fuel_warning = 0;
-                last_fuel_amount_logged = -1;
-                refueling = 0;
-                pthread_mutex_unlock(&fuelLock);
+          if (eng == 0 && spd == 0)
+          {
+            pthread_mutex_lock(&fuelLock);
+            refueling = 1;
+            pthread_mutex_unlock(&fuelLock);
+            sleep(5);
+            pthread_mutex_lock(&fuelLock);
+            fuel = 4.7f;
+            low_fuel_warning = 0;
+            last_fuel_amount_logged = -1;
+            refueling = 0;
+            pthread_mutex_unlock(&fuelLock);
 
-                notify_ecu();
-            }
-            break;
+            notify_ecu();
           }
+          break;
+        }
 
         case 'I':
           pthread_mutex_lock(&fuelLock);
           float current_fuel = fuel;
           int is_refueling = refueling;
           pthread_mutex_unlock(&fuelLock);
-          pthread_mutex_lock(&engineLock);
-          if (engine_state == 0 && current_fuel > 0 && is_refueling == 0) {
+          pthread_mutex_lock(&engineStateLock);
+          if (engine_state == 0 && current_fuel > 0 && is_refueling == 0)
+          {
+            pthread_mutex_lock(&engineLock);
             engine_state = 1;
             rpm = 1200;
+            pthread_mutex_unlock(&engineLock);
           }
-          pthread_mutex_unlock(&engineLock);
+          pthread_mutex_unlock(&engineStateLock);
           notify_ecu();
           break;
 
         case 'K':
-          //kill switch
-          //lock the engine mutex
-          pthread_mutex_lock(&engineLock);
+          // kill switch
+          // lock the engine mutex
+          pthread_mutex_lock(&engineStateLock);
 
-          //only change engine state and rpm if engine is on
+          // only change engine state and rpm if engine is on
           if (engine_state == 1)
           {
+            pthead_mutex_lock(&engineLock);
             engine_state = 0;
             rpm = 0;
             rpm_zone = -1;
+            pthread_mutex_unlock(&engineLock);
           }
-          
+
           pthread_mutex_unlock(&engineLock);
-          
-          //lock motion thread
+
+          // lock motion thread
           pthread_mutex_lock(&motionLock);
 
-          //stop motion
+          // stop motion
           speed = 0;
           direction = 0;
-          //reset current trip distance
+          // reset current trip distance
           distance_trip = 0.0f;
-          //since speed is 0, total distance will naturally pause
+          // since speed is 0, total distance will naturally pause
           engine_off_decelerate = 0;
 
           pthread_mutex_unlock(&motionLock);
-          
-          //lock the dashboard mutex
+
+          // lock the dashboard mutex
           pthread_mutex_lock(&dashboardLock);
-        
-          //reset current trip time
+
+          // reset current trip time
           time_elapsed_trip.hours = 0;
           time_elapsed_trip.minutes = 0;
           time_elapsed_trip.seconds = 0;
-        
+
           pthread_mutex_unlock(&dashboardLock);
-          
-          //lock hybrid assist mutext
+
+          // lock hybrid assist mutext
           pthread_mutex_lock(&hybridAssistLock);
-        
-          //turn off battery mode / hybrid assist when kill switch is pressed
+
+          // turn off battery mode / hybrid assist when kill switch is pressed
           battery_mode_on = 0;
           electric_assist_state = 0;
           charging_state = 0;
           hybrid_mode = 0;
-        
+
           pthread_mutex_unlock(&hybridAssistLock);
-        
-          //wake hybrid thread so dashboard updates hybrid status
+
+          // wake hybrid thread so dashboard updates hybrid status
           pthread_mutex_lock(&hybridAssistConditionalLock);
           hybrid_update = 1;
           pthread_cond_signal(&speedChangeConditional);
           pthread_mutex_unlock(&hybridAssistConditionalLock);
-          
-          //notify ecu
+
+          // notify ecu
           notify_ecu();
           break;
 
@@ -425,9 +433,8 @@ void *input_thread(void *arg)
           pthread_mutex_destroy(&eventQueueLock);
           pthread_mutex_destroy(&dashboardLock);
           pthread_mutex_destroy(&ecuConditionalLock);
-          pthread_mutex_destroy(&motionConditionalLock);
           pthread_mutex_destroy(&hybridAssistConditionalLock);
-          pthread_mutex_destroy(&fuelEngineOnLock);
+          pthread_mutex_destroy(&engineStateLock);
 
           // destroy all conditionals
           pthread_cond_destroy(&ecuConditional);
@@ -458,6 +465,7 @@ void *engine_thread(void *arg)
   while (running)
   {
     // critical
+    pthread_mutex_lock(&engineStateLock);
     pthread_mutex_lock(&engineLock);
 
     // check if the battery mode is on
@@ -556,21 +564,20 @@ void *engine_thread(void *arg)
         engine_temp = 130;
     }
 
+    pthread_mutex_unlock(&engineStateLock);
     pthread_mutex_unlock(&engineLock);
 
     // notify ECU that engine state/rpm/temp may have changed
     notify_ecu();
 
     // if engine is on, signal the fuel thread that it can consume fuel, and signal motion thread
+    pthread_mutex_lock(&engineStateLock);
     if (engine_state == 1)
     {
-      pthread_mutex_lock(&fuelEngineOnLock);
       pthread_cond_signal(&fuelEngineOnConditional);
-      pthread_mutex_unlock(&fuelEngineOnLock);
-      pthread_mutex_lock(&motionConditionalLock);
       pthread_cond_signal(&engineOnConditional);
-      pthread_mutex_unlock(&motionConditionalLock);
     }
+    pthread_mutex_unlock(&engineStateLock);
 
     sleep(1); // update every second
   }
@@ -586,12 +593,13 @@ void *motion_thread(void *arg)
   {
     // Condition Variable
     // Wait until the engine is actually ON
-    pthread_mutex_lock(&motionConditionalLock);
+    pthread_mutex_lock(&engineStateLock);
+
     while (engine_state == 0 && engine_off_decelerate == 0)
     {
-      pthread_cond_wait(&engineOnConditional, &motionConditionalLock);
+      pthread_cond_wait(&engineOnConditional, &engineStateLock);
     }
-    pthread_mutex_unlock(&motionConditionalLock);
+    pthread_mutex_unlock(&engineStateLock);
 
     //================
     // CRITICAL SECTION
@@ -644,11 +652,11 @@ void *motion_thread(void *arg)
         // make sure speed isnt 0 or max speed
         if (direction == 1)
         {
-            speed += (max_speed - speed) * 0.2 * 1;
+          speed += (max_speed - speed) * 0.2 * 1;
         }
         else if (direction == -1 && speed > 0)
         {
-            speed -= (speed - 0) * 0.1 * 1;
+          speed -= (speed - 0) * 0.1 * 1;
         }
       }
 
@@ -688,15 +696,15 @@ void *fuel_thread(void *arg)
   while (running)
   {
     // crit sect. wait for engine to be on
-    pthread_mutex_lock(&fuelEngineOnLock);
+    pthread_mutex_lock(&engineStateLock);
 
     // wait on the condition variable until signaled by the engine thread
     while (engine_state == 0)
     {
-      pthread_cond_wait(&fuelEngineOnConditional, &fuelEngineOnLock);
+      pthread_cond_wait(&fuelEngineOnConditional, &engineStateLock);
     }
 
-    pthread_mutex_unlock(&fuelEngineOnLock);
+    pthread_mutex_unlock(&engineStateLock);
 
     pthread_mutex_lock(&engineLock); // also lock engine since we need to check rpm zones, maintain locking order present throughout all threads
     pthread_mutex_lock(&fuelLock);
@@ -725,7 +733,9 @@ void *fuel_thread(void *arg)
     // check if the fuel is 0 and shutoff the engine
     if (fuel <= 0)
     {
+      pthread_mutex_lock(&engineStateLock);
       engine_state = 0;
+      pthread_mutex_unlock(&engineStateLock);
       fuel = 0;
     }
 
@@ -778,6 +788,7 @@ void *ecu_thread(void *arg)
     // lock engine and motion to check rpm, ropm zones, speeds, etc.
     pthread_mutex_lock(&engineLock);
     pthread_mutex_lock(&motionLock);
+    pthread_mutex_lock(&engineStateLock);
 
     // if engine is off make sure rpm and speed is at 0
     if (engine_state == 0)
@@ -794,6 +805,8 @@ void *ecu_thread(void *arg)
     {
       rpm = 1200; // if engine is on but speed is 0, set to idle rpm
     }
+
+    pthread_mutex_unlock(&engineStateLock);
 
     // determine the new rpm zone from rpm
     int old_zone = rpm_zone;
@@ -933,6 +946,7 @@ void *ecu_thread(void *arg)
     pthread_mutex_lock(&engineLock);
     pthread_mutex_lock(&motionLock);
     pthread_mutex_lock(&ecuLock);
+    pthread_mutex_lock(&engineStateLock);
     if (engine_state == 0)
     {
       system_state = ENGINE_OFF_STATE;
@@ -977,6 +991,7 @@ void *ecu_thread(void *arg)
     }
 
     pthread_mutex_unlock(&hybridAssistLock); // unlock hybrid assist since we no longer need to check rpm zones or temps
+    pthread_mutex_unlock(&engineStateLock);
   }
 
   return NULL;
@@ -1200,7 +1215,9 @@ void print_dash_row(const char *fmt, ...)
 // function to print the dashboard
 void print_dashboard(void)
 {
+  pthread_mutex_lock(&engineStateLock);
   char *eng_status = (engine_state == 1) ? "ON" : "OFF";
+  pthread_mutex_unlock(&engineStateLock);
 
   pthread_mutex_lock(&dashboardLock);
   char *signal_label;
@@ -1397,13 +1414,14 @@ void *time_thread(void *arg)
 {
   while (running)
   {
-    //check the engine state as time should only increment when engine is running
-    //this is for Phase 3 kil switch
-    pthread_mutex_lock(&engineLock);
+    // check the engine state as time should only increment when engine is running
+    // this is for Phase 3 kil switch
+    pthread_mutex_lock(&engineStateLock);
     int local_engine_state = engine_state;
-    pthread_mutex_unlock(&engineLock);
+    pthread_mutex_unlock(&engineStateLock);
 
-    if (local_engine_state == 1) {
+    if (local_engine_state == 1)
+    {
       pthread_mutex_lock(&dashboardLock);
       time_elapsed_trip.seconds++;
       if (time_elapsed_trip.seconds == 60)
@@ -1505,6 +1523,7 @@ int main(int argc, char *argv[])
   system_state = NORMAL_STATE;
 
   // initialize all mutex's
+  pthread_mutex_init(&engineStateLock, NULL);
   pthread_mutex_init(&engineLock, NULL);
   pthread_mutex_init(&motionLock, NULL);
   pthread_mutex_init(&fuelLock, NULL);
@@ -1513,9 +1532,7 @@ int main(int argc, char *argv[])
   pthread_mutex_init(&eventQueueLock, NULL);
   pthread_mutex_init(&dashboardLock, NULL);
   pthread_mutex_init(&ecuConditionalLock, NULL);
-  pthread_mutex_init(&motionConditionalLock, NULL);
   pthread_mutex_init(&hybridAssistConditionalLock, NULL);
-  pthread_mutex_init(&fuelEngineOnLock, NULL);
 
   // initialize conditionals
   pthread_cond_init(&ecuConditional, NULL);
