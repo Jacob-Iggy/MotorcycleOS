@@ -291,7 +291,62 @@ void *input_thread(void *arg)
           break;
 
         case 'K':
-          // TODO: kill switch
+          //kill switch
+          //lock the engine mutex
+          pthread_mutex_lock(&engineLock);
+
+          //only change engine state and rpm if engine is on
+          if (engine_state == 1)
+          {
+            engine_state = 0;
+            rpm = 0;
+            rpm_zone = -1;
+          }
+          
+          pthread_mutex_unlock(&engineLock);
+          
+          //lock motion thread
+          pthread_mutex_lock(&motionLock);
+
+          //stop motion
+          speed = 0;
+          direction = 0;
+          //reset current trip distance
+          distance_trip = 0.0f;
+          //since speed is 0, total distance will naturally pause
+          engine_off_decelerate = 0;
+
+          pthread_mutex_unlock(&motionLock);
+          
+          //lock the dashboard mutex
+          pthread_mutex_lock(&dashboardLock);
+        
+          //reset current trip time
+          time_elapsed_trip.hours = 0;
+          time_elapsed_trip.minutes = 0;
+          time_elapsed_trip.seconds = 0;
+        
+          pthread_mutex_unlock(&dashboardLock);
+          
+          //lock hybrid assist mutext
+          pthread_mutex_lock(&hybridAssistLock);
+        
+          //turn off battery mode / hybrid assist when kill switch is pressed
+          battery_mode_on = 0;
+          electric_assist_state = 0;
+          charging_state = 0;
+          hybrid_mode = 0;
+        
+          pthread_mutex_unlock(&hybridAssistLock);
+        
+          //wake hybrid thread so dashboard updates hybrid status
+          pthread_mutex_lock(&hybridAssistConditionalLock);
+          hybrid_update = 1;
+          pthread_cond_signal(&speedChangeConditional);
+          pthread_mutex_unlock(&hybridAssistConditionalLock);
+          
+          //notify ecu
+          notify_ecu();
           break;
 
         case 'I':
@@ -1313,31 +1368,39 @@ void *time_thread(void *arg)
 {
   while (running)
   {
-    pthread_mutex_lock(&dashboardLock);
-    time_elapsed_trip.seconds++;
-    if (time_elapsed_trip.seconds == 60)
-    {
-      time_elapsed_trip.seconds = 0;
-      time_elapsed_trip.minutes++;
-    }
-    if (time_elapsed_trip.minutes == 60)
-    {
-      time_elapsed_trip.minutes = 0;
-      time_elapsed_trip.hours++;
-    }
+    //check the engine state as time should only increment when engine is running
+    //this is for Phase 3 kil switch
+    pthread_mutex_lock(&engineLock);
+    int local_engine_state = engine_state;
+    pthread_mutex_unlock(&engineLock);
 
-    time_elapsed_total.seconds++;
-    if (time_elapsed_total.seconds == 60)
-    {
-      time_elapsed_total.seconds = 0;
-      time_elapsed_total.minutes++;
+    if (local_engine_state == 1) {
+      pthread_mutex_lock(&dashboardLock);
+      time_elapsed_trip.seconds++;
+      if (time_elapsed_trip.seconds == 60)
+      {
+        time_elapsed_trip.seconds = 0;
+        time_elapsed_trip.minutes++;
+      }
+      if (time_elapsed_trip.minutes == 60)
+      {
+        time_elapsed_trip.minutes = 0;
+        time_elapsed_trip.hours++;
+      }
+
+      time_elapsed_total.seconds++;
+      if (time_elapsed_total.seconds == 60)
+      {
+        time_elapsed_total.seconds = 0;
+        time_elapsed_total.minutes++;
+      }
+      if (time_elapsed_total.minutes == 60)
+      {
+        time_elapsed_total.minutes = 0;
+        time_elapsed_total.hours++;
+      }
+      pthread_mutex_unlock(&dashboardLock);
     }
-    if (time_elapsed_total.minutes == 60)
-    {
-      time_elapsed_total.minutes = 0;
-      time_elapsed_total.hours++;
-    }
-    pthread_mutex_unlock(&dashboardLock);
     sleep(1);
   }
   return NULL;
