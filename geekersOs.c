@@ -56,6 +56,7 @@ struct termios original_terminal; // struct variable to store the original termi
 // ENGINE SUBSYSTEM VARIABLES
 pthread_mutex_t engineLock; // mutex lock for engine subsystem
 int engine_state;           // 0 = off, 1 = on
+int refueling = 0;
 int rpm;                    // 0 if engine off, 1100-16500 if on
 int rpm_zone;               // 0 = idle, 1 = normal, 2 = high, 3 = redline
 int engine_temp;            // temp in degrees Celsius
@@ -286,8 +287,44 @@ void *input_thread(void *arg)
           pthread_mutex_unlock(&dashboardLock);
           break;
 
-        case 'F':
-          // TODO: refuel
+        case 'F':{
+            pthread_mutex_lock(&engineLock);
+            int eng = engine_state;
+            pthread_mutex_unlock(&engineLock);
+
+            pthread_mutex_lock(&motionLock);
+            int spd = speed;
+            pthread_mutex_unlock(&motionLock);
+
+            if (eng == 0 && spd == 0) {
+                pthread_mutex_lock(&fuelLock);
+                refueling = 1;
+                pthread_mutex_unlock(&fuelLock);
+                sleep(5);
+                pthread_mutex_lock(&fuelLock);
+                fuel = 4.7f;
+                low_fuel_warning = 0;
+                last_fuel_amount_logged = -1;
+                refueling = 0;
+                pthread_mutex_unlock(&fuelLock);
+
+                notify_ecu();
+            }
+            break;
+          }
+
+        case 'I':
+          pthread_mutex_lock(&fuelLock);
+          float current_fuel = fuel;
+          int is_refueling = refueling;
+          pthread_mutex_unlock(&fuelLock);
+          pthread_mutex_lock(&engineLock);
+          if (engine_state == 0 && current_fuel > 0 && is_refueling == 0) {
+            engine_state = 1;
+            rpm = 1200;
+          }
+          pthread_mutex_unlock(&engineLock);
+          notify_ecu();
           break;
 
         case 'K':
@@ -347,10 +384,6 @@ void *input_thread(void *arg)
           
           //notify ecu
           notify_ecu();
-          break;
-
-        case 'I':
-          // TODO: ignition
           break;
 
         case 'B':
@@ -609,17 +642,13 @@ void *motion_thread(void *arg)
       else
       {
         // make sure speed isnt 0 or max speed
-        if (!(speed <= 0 || speed == max_speed))
+        if (direction == 1)
         {
-          if (direction == 1)
-          {
-            speed += (max_speed - speed) * 0.2 * 1; // use formula, use 0.2 as acceleration factor, multiply by 1 for delta time of 1 second
-          }
-          else if (direction == -1)
-          {
-            speed -= (speed - 0) * 0.1 * 1; // decelerate using formula, multiply by 1 for delta time of 1 second
-          }
-          // last case if direction is 0 for cruising, we can just maintain speed so do nothing
+            speed += (max_speed - speed) * 0.2 * 1;
+        }
+        else if (direction == -1 && speed > 0)
+        {
+            speed -= (speed - 0) * 0.1 * 1;
         }
       }
 
