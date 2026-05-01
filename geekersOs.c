@@ -344,13 +344,14 @@ void *input_thread(void *arg)
           // only change engine state and rpm if engine is on
           if (engine_state == 1)
           {
-            pthead_mutex_lock(&engineLock);
+            pthread_mutex_lock(&engineLock);
             engine_state = 0;
             // set kill switch active to indicate we need to gradually decrease speed and rpm in their respective threads
             kill_switch_active = 1;
+            pthread_mutex_unlock(&engineLock);
           }
 
-          pthread_mutex_unlock(&engineLock);
+          pthread_mutex_unlock(&engineStateLock);
 
           // lock motion thread
           pthread_mutex_lock(&motionLock);
@@ -655,15 +656,11 @@ void *motion_thread(void *arg)
         // make sure speed isnt 0 or max speed
         if (direction == 1)
         {
-          if (direction == 1)
-          {
-            speed += (max_speed - speed) * 0.02 * 1; // use formula, use 0.02 as acceleration factor, multiply by 1 for delta time of 1 second
-          }
-          else if (direction == -1)
-          {
-            speed -= (speed - 0) * 0.1 * 1; // decelerate using formula, multiply by 1 for delta time of 1 second
-          }
-          // last case if direction is 0 for cruising, we can just maintain speed so do nothing
+          speed += (max_speed - speed) * 0.02 * 1; // use formula, use 0.02 as acceleration factor, multiply by 1 for delta time of 1 second
+        }
+        else if (direction == -1)
+        {
+          speed -= (speed - 0) * 0.1 * 1; // decelerate using formula, multiply by 1 for delta time of 1 second
         }
       }
 
