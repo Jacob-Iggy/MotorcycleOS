@@ -56,6 +56,9 @@ struct termios original_terminal; // struct variable to store the original termi
 // Engine State Variable
 pthread_mutex_t engineStateLock; // mutex lock for engine state
 int engine_state;
+//kill switch global
+//used to gradually decrease values when active
+int kill_switch_active;
 
 // ENGINE SUBSYSTEM VARIABLES
 pthread_mutex_t engineLock; // mutex lock for engine subsystem
@@ -343,9 +346,8 @@ void *input_thread(void *arg)
           {
             pthead_mutex_lock(&engineLock);
             engine_state = 0;
-            rpm = 0;
-            rpm_zone = -1;
-            pthread_mutex_unlock(&engineLock);
+            // set kill switch active to indicate we need to gradually decrease speed and rpm in their respective threads
+            kill_switch_active = 1;
           }
 
           pthread_mutex_unlock(&engineLock);
@@ -353,13 +355,14 @@ void *input_thread(void *arg)
           // lock motion thread
           pthread_mutex_lock(&motionLock);
 
-          // stop motion
-          speed = 0;
+          //stop direction
           direction = 0;
-          // reset current trip distance
+
+          //tell motion thread to decelerate since the engine is off
+          engine_off_decelerate = 1;
+
+          //reset current trip distance
           distance_trip = 0.0f;
-          // since speed is 0, total distance will naturally pause
-          engine_off_decelerate = 0;
 
           pthread_mutex_unlock(&motionLock);
 
@@ -652,11 +655,15 @@ void *motion_thread(void *arg)
         // make sure speed isnt 0 or max speed
         if (direction == 1)
         {
-          speed += (max_speed - speed) * 0.2 * 1;
-        }
-        else if (direction == -1 && speed > 0)
-        {
-          speed -= (speed - 0) * 0.1 * 1;
+          if (direction == 1)
+          {
+            speed += (max_speed - speed) * 0.02 * 1; // use formula, use 0.02 as acceleration factor, multiply by 1 for delta time of 1 second
+          }
+          else if (direction == -1)
+          {
+            speed -= (speed - 0) * 0.1 * 1; // decelerate using formula, multiply by 1 for delta time of 1 second
+          }
+          // last case if direction is 0 for cruising, we can just maintain speed so do nothing
         }
       }
 
@@ -793,7 +800,6 @@ void *ecu_thread(void *arg)
     // if engine is off make sure rpm and speed is at 0
     if (engine_state == 0)
     {
-      rpm = 0;
       rpm_zone = -1;
       if (speed > 0)
       {
@@ -801,7 +807,7 @@ void *ecu_thread(void *arg)
       }
     }
 
-    if (engine_state == 1 && speed == 0)
+    if (engine_state == 1 && speed == 0 && battery_mode_on == 0)
     {
       rpm = 1200; // if engine is on but speed is 0, set to idle rpm
     }
@@ -1008,7 +1014,7 @@ void *hybrid_assist_thread(void *arg)
     // Condition Variable
     // Wait for speed change from motion thread before applying hybrid assist logic
     pthread_mutex_lock(&hybridAssistConditionalLock);
-    // loop while hybrid update is 0 to avoid waiting on the conditional if the variable is already set to 1 from a previous signal
+    // loop while hybrid update is 0 to avoid waiting onb the conditional if the variable is already set to 1 from a previous signal
     while (hybrid_update == 0)
     {
       pthread_cond_wait(&speedChangeConditional, &hybridAssistConditionalLock);
@@ -1026,10 +1032,40 @@ void *hybrid_assist_thread(void *arg)
     {
       electric_assist_state = 1;
       charging_state = 0;
-      hybrid_mode = 1; // using CRUISING as battery-drive mode
 
-      // drain battery while battery mode is active
-      battery_level -= 0.15;
+      //handle all hybrid assist speed ranges
+      if (direction == 1) {
+          if (speed > 0 && speed <= 30)
+          {
+            // set hybrid mode
+            hybrid_mode = 1;
+            // make sure charging state is off
+            charging_state = 0;
+            // vehicle uses battery assist so battery gets drained
+            battery_level -= 0.05;
+          }
+          else if (speed > 30 && speed <= 60)
+          {
+            hybrid_mode = 2;
+            charging_state = 0;
+            battery_level -= 0.07;
+          }
+          else if (speed > 60 && speed <= max_speed)
+          {
+            hybrid_mode = 2;
+            charging_state = 0;
+            battery_level -= 0.09;
+          }
+      }
+      //regenerate only if direction is -1 (deceleration)
+      else if (direction == -1 && engine_state == 1)
+      {
+        // regeneration
+        hybrid_mode = 3;
+        electric_assist_state = 0;
+        charging_state = 1;
+        battery_level += 0.03;
+      }
 
       // once battery reaches zero, battery mode shuts off automatically
       if (battery_level <= 0)
@@ -1042,60 +1078,13 @@ void *hybrid_assist_thread(void *arg)
       }
     }
 
-    // normal hybrid assist logic
+    // normal hybrid assist logic (shouldnt be anything due to phase 3 toggle)
     else
     {
-      // only run hybrid assist if ECU has allowed it
-      if (electric_assist_allowed == 1)
-      {
-        // check if engine is on and decelerating, if so turn on regeneration mode
-        if (direction == -1 && engine_state == 1)
-        {
-          // regeneration
-          hybrid_mode = 3;
-          electric_assist_state = 0;
-          charging_state = 1;
-          battery_level += 0.07;
-        }
-        else if (direction == 1)
-        {
-          // handle all cases for hybrid assist when accelerating
-          if (speed > 0 && speed <= 30)
-          {
-            // Low-Speed Electric Cruising
-            // set the electric assist state to on
-            electric_assist_state = 1;
-            // set hybrid mode
-            hybrid_mode = 1;
-            // make sure charging state is off
-            charging_state = 0;
-            // vehicle uses battery assist so battery gets drained
-            battery_level -= 0.05;
-          }
-          else if (speed > 30 && speed <= 60)
-          {
-            // Electric Assist During Acceleration
-            electric_assist_state = 1;
-            hybrid_mode = 2;
-            charging_state = 0;
-            battery_level -= 0.07;
-          }
-          else if (speed > 60 && speed <= max_speed)
-          {
-            electric_assist_state = 1;
-            hybrid_mode = 2;
-            charging_state = 0;
-            battery_level -= 0.09;
-          }
-        }
-      }
-      else
-      {
-        // ECU has disable electric assist
-        electric_assist_state = 0;
-        charging_state = 0;
-        hybrid_mode = 0;
-      }
+      // ECU has disable electric assist
+      electric_assist_state = 0;
+      charging_state = 0;
+      hybrid_mode = 0;
     }
 
     pthread_mutex_unlock(&motionLock); // unlock motion since we no longer need to check speed
@@ -1481,6 +1470,8 @@ int main(int argc, char *argv[])
   // restore terminal settings on exit
   atexit(restore_terminal);
 
+  kill_switch_active = 0;
+
   rpm_zone = 0;
   engine_temp = 45; // cold start
   engine_temp_zone = 0;
@@ -1567,53 +1558,3 @@ int main(int argc, char *argv[])
   pthread_join(time_tid, NULL);
   return 0;
 }
-
-// engine state ═ on/off
-
-// RPM ═ if engine = off rpm = 0
-// if on not moving 1100═1300
-
-// RPM ═ if engine = off rpm = 0
-// if on not moving 1100═1300
-
-// RPM ZONE:
-// Idle = [1100═1300)
-// Normal = [1300═8000)
-// High = [8000═14500)
-// Redline = [14500═16500)
-
-// Engine Temp:
-// Cold < 60 deg C
-// Normal 60 ═ 95
-// Hot 95 ═ 105
-// Overheat > 105
-
-// Time:
-// Time Elapsed overall = random value everytime program starts
-// Time Elapsed current = time since vehicle turned on
-// HH:MM:SS
-
-// Speed:
-// Engine off = 0
-// Between 0 ═ 200 mph
-
-// Fuel:
-// Visually as a bar and numbers
-// 0 ═ 4.7 gal
-// If fuel < 0.7 indicate low on fuel
-
-// Distance Traveled:
-// Total = random
-// Current trip distance = distance from vehicle turned on
-// Update both as vehicle is moving
-// Current trip distance alway 0 at start
-
-// Signal State:
-// Left, Right, Off
-// Hazards = Both left/right
-
-// Headlight:
-// on/off
-
-// Event Logging Subsystem:
-// Display most recent events`
